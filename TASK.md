@@ -239,7 +239,7 @@ Not yet deployed anywhere.
       `dotnet list package --vulnerable`, and `govulncheck`.
 - [ ] `gofmt -l` flags 7 agent files (alignment only). Run `gofmt -w` in its own commit, and add a CI check.
 - [ ] `make test` / `make lint` end every line with `|| true`, so failures are invisible.
-- [ ] `git init` and make the first commit (the project isn't under version control yet).
+- [x] Under version control: https://github.com/jahmed-cloud/TenantWarden (first push 2026-10-25).
 
 ## Product name
 
