@@ -1,0 +1,6 @@
+# Keep LF everywhere: shell scripts, Dockerfiles and SQL run inside Linux containers
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.jpg binary

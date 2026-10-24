@@ -1,0 +1,508 @@
+
+name: tenantwarden
+
+##############################################################################
+# Networks
+##############################################################################
+networks:
+  tenantwarden-internal:
+    driver: bridge
+  tenantwarden-monitoring:
+    driver: bridge
+
+##############################################################################
+# Volumes
+##############################################################################
+volumes:
+  postgres-data:
+  clickhouse-data:
+  redis-data:
+  minio-data:
+  grafana-data:
+  loki-data:
+  prometheus-data:
+
+##############################################################################
+# Services
+##############################################################################
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Gateway (Nginx reverse proxy + rate limiting + TLS termination)
+  # ─────────────────────────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: tenantwarden-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HTTP_PORT:-8090}:80"
+      - "${GATEWAY_HTTPS_PORT:-8443}:443"
+    depends_on:
+      - frontend
+      - api
+      - auth-service
+      - agent-gateway
+    networks:
+      - tenantwarden-internal
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/certs:/etc/nginx/certs:ro
+      - ./agent/dist:/usr/share/nginx/agent-dist:ro
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Frontend (React + TypeScript + Vite)
+  # ─────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-production}
+    container_name: tenantwarden-frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=${API_URL:-http://localhost/api}
+      - VITE_AUTH_URL=${AUTH_URL:-http://localhost/auth}
+      - VITE_WS_URL=${WS_URL:-ws://localhost/ws}
+      - VITE_AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - VITE_AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - VITE_APP_VERSION=${APP_VERSION:-1.0.0}
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Core API (ASP.NET Core 9)
+  # ─────────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: tenantwarden-api
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__Postgres=${POSTGRES_CONNECTION}
+      - ConnectionStrings__ClickHouse=${CLICKHOUSE_CONNECTION}
+      - ConnectionStrings__Redis=${REDIS_CONNECTION}
+      - Storage__MinIO__Endpoint=${MINIO_ENDPOINT:-minio:9000}
+      - Storage__MinIO__AccessKey=${MINIO_ACCESS_KEY}
+      - Storage__MinIO__SecretKey=${MINIO_SECRET_KEY}
+      - Auth__Authority=${AUTH_AUTHORITY}
+      - Auth__ClientId=${AZURE_CLIENT_ID}
+      - Auth__TenantId=${AZURE_TENANT_ID}
+      - Auth__Jwt__SigningKey=${JWT_SIGNING_KEY}
+      - Encryption__TenantSecretKey=${ENCRYPTION_KEY}
+      - Auth__Jwt__Issuer=${JWT_ISSUER:-tenantwarden}
+      - Auth__Jwt__Audience=${JWT_AUDIENCE:-tenantwarden-api}
+      - Kafka__BootstrapServers=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - App__Version=${APP_VERSION:-1.0.0}
+      - App__Edition=${APP_EDITION:-Enterprise}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+      - tenantwarden-monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Auth Service (MSAL + JWT + API key management)
+  # ─────────────────────────────────────────────────────────────────────────
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: tenantwarden-auth
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8081
+      - ConnectionStrings__Postgres=${POSTGRES_CONNECTION}
+      - ConnectionStrings__Redis=${REDIS_CONNECTION}
+      - Auth__AzureAd__TenantId=${AZURE_TENANT_ID}
+      - Auth__AzureAd__ClientId=${AZURE_CLIENT_ID}
+      - Auth__AzureAd__ClientSecret=${AZURE_CLIENT_SECRET}
+      - Auth__Jwt__SigningKey=${JWT_SIGNING_KEY}
+      - Auth__Jwt__Issuer=${JWT_ISSUER:-tenantwarden}
+      - Auth__Jwt__Audience=${JWT_AUDIENCE:-tenantwarden-api}
+      - Auth__Jwt__AccessTokenExpiry=${JWT_ACCESS_EXPIRY:-15m}
+      - Auth__Jwt__RefreshTokenExpiry=${JWT_REFRESH_EXPIRY:-7d}
+      - Auth__Totp__Issuer=TenantWarden
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Collector Service (Microsoft Graph API polling)
+  # ─────────────────────────────────────────────────────────────────────────
+  collector-service:
+    build:
+      context: ./collector-service
+      dockerfile: Dockerfile
+    container_name: tenantwarden-collector
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - POSTGRES_URL=${POSTGRES_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - KAFKA_BROKERS=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - GRAPH_API_BATCH_SIZE=${GRAPH_BATCH_SIZE:-20}
+      - COLLECTOR_INTERVAL_SECONDS=${COLLECTOR_INTERVAL:-3600}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - GRAPH_SCOPE=https://graph.microsoft.com/.default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Alert Engine (rule evaluation + alert lifecycle)
+  # ─────────────────────────────────────────────────────────────────────────
+  alert-engine:
+    build:
+      context: ./alert-engine
+      dockerfile: Dockerfile
+    container_name: tenantwarden-alerts
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - EVAL_INTERVAL_SECONDS=${EVAL_INTERVAL:-60}
+      - POSTGRES_URL=${POSTGRES_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - KAFKA_BROKERS=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Analytics Engine (trend detection, anomaly, forecasting)
+  # ─────────────────────────────────────────────────────────────────────────
+  analytics-engine:
+    build:
+      context: ./analytics-engine
+      dockerfile: Dockerfile
+    container_name: tenantwarden-analytics
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - ANALYTICS_INTERVAL_SECONDS=${ANALYTICS_INTERVAL:-14400}
+      - POSTGRES_URL=${POSTGRES_URL}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://clickhouse:8123}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - KAFKA_BROKERS=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - AI_PROVIDER=${AI_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Notification Service (Teams, Slack, email, webhooks)
+  # ─────────────────────────────────────────────────────────────────────────
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: tenantwarden-notifications
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - POSTGRES_URL=${POSTGRES_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - KAFKA_BROKERS=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - SMTP_FROM=${SMTP_FROM:-alerts@tenantwarden.local}
+      - APP_URL=${APP_URL:-http://localhost:8090}
+      - SERVICENOW_INSTANCE=${SERVICENOW_INSTANCE}
+      - SERVICENOW_USER=${SERVICENOW_USER}
+      - SERVICENOW_PASS=${SERVICENOW_PASS}
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_EMAIL=${JIRA_EMAIL}
+      - JIRA_TOKEN=${JIRA_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Agent Gateway (mTLS WebSocket hub for TenantWarden agents)
+  # ─────────────────────────────────────────────────────────────────────────
+  agent-gateway:
+    build:
+      context: ./agent-gateway
+      dockerfile: Dockerfile
+    container_name: tenantwarden-agent-gw
+    restart: unless-stopped
+    ports:
+      - "4433:4433"   # mTLS agent connections
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - ConnectionStrings__Postgres=${POSTGRES_CONNECTION}
+      - ConnectionStrings__Redis=${REDIS_CONNECTION}
+      - Kafka__BootstrapServers=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - Auth__Jwt__SigningKey=${JWT_SIGNING_KEY}
+      - Auth__Jwt__Issuer=${JWT_ISSUER:-tenantwarden}
+      - Agent__InternalApiToken=${AGENT_INTERNAL_API_TOKEN:-}
+      - Tls__CertPath=/certs/server.crt
+      - Tls__KeyPath=/certs/server.key
+      - Tls__CaPath=/certs/ca.crt
+      - Agent__HeartbeatTimeoutSeconds=90
+      - Agent__MaxConnectionsPerTenant=500
+    volumes:
+      - ./agent-gateway/certs:/certs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Plugin Engine
+  # ─────────────────────────────────────────────────────────────────────────
+  plugin-engine:
+    build:
+      context: ./plugin-engine
+      dockerfile: Dockerfile
+    container_name: tenantwarden-plugins
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - POSTGRES_URL=${POSTGRES_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - PLUGIN_SANDBOX=true
+    networks:
+      - tenantwarden-internal
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Scheduler (cron-based jobs)
+  # ─────────────────────────────────────────────────────────────────────────
+  scheduler:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+    container_name: tenantwarden-scheduler
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - POSTGRES_URL=${POSTGRES_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - KAFKA_BROKERS=${KAFKA_BOOTSTRAP:-kafka:9092}
+      - API_URL=http://api:8080
+      - COLLECTOR_URL=http://collector-service:3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tenantwarden-internal
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # DATA LAYER
+  # ═══════════════════════════════════════════════════════════════════════
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tenantwarden-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-tenantwarden}
+      - POSTGRES_USER=${POSTGRES_USER:-tenantwarden}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tenantwarden} -d ${POSTGRES_DB:-tenantwarden}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: tenantwarden-clickhouse
+    restart: unless-stopped
+    environment:
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-tenantwarden_analytics}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-tenantwarden}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-tenantwarden}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:8123:8123"   # HTTP
+      - "127.0.0.1:9009:9000"   # Native TCP (moved from 9000 to avoid potential conflicts)
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: tenantwarden-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Opt-in (`--profile storage`): nothing uses object storage yet, and minio/minio
+  # is no longer pullable from Docker Hub (2026-10) — pick a new image before enabling.
+  minio:
+    profiles: ["storage"]
+    image: minio/minio:latest
+    container_name: tenantwarden-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:9002:9000"
+      - "127.0.0.1:9001:9001"
+    networks:
+      - tenantwarden-internal
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # OBSERVABILITY
+  # ═══════════════════════════════════════════════════════════════════════
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.51.0
+    container_name: tenantwarden-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - tenantwarden-monitoring
+      - tenantwarden-internal
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:10.4.0
+    container_name: tenantwarden-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_SERVER_ROOT_URL=${GRAFANA_URL:-http://127.0.0.1:3000}
+      - GF_AUTH_GENERIC_OAUTH_ENABLED=true
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - tenantwarden-monitoring
+
+  loki:
+    profiles: ["monitoring"]
+    image: grafana/loki:2.9.6
+    container_name: tenantwarden-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks:
+      - tenantwarden-monitoring
+      - tenantwarden-internal

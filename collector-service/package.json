@@ -1,0 +1,33 @@
+{
+  "name": "@tenantwarden/collector-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start":   "node dist/index.js",
+    "dev":     "tsx watch src/index.ts",
+    "build":   "tsc",
+    "test":    "vitest run",
+    "lint":    "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@azure/identity":           "^4.2.1",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "kafkajs":                   "^2.2.4",
+    "pg":                        "^8.11.5",
+    "ioredis":                   "^5.3.2",
+    "pino":                      "^9.0.0",
+    "pino-pretty":               "^11.0.0",
+    "p-limit":                   "^5.0.0",
+    "p-retry":                   "^6.2.0",
+    "dayjs":                     "^1.11.10",
+    "zod":                       "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node":   "^20.12.5",
+    "@types/pg":     "^8.11.5",
+    "typescript":    "^5.4.5",
+    "tsx":           "^4.7.2",
+    "vitest":        "^1.4.0"
+  }
+}

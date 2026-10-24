@@ -1,0 +1,116 @@
+{{- $svc := .Values.api }}
+{{- if $svc.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantwarden-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: tenantwarden-api
+    version: {{ .Values.global.imageTag | quote }}
+spec:
+  replicas: {{ $svc.replicas | default 2 }}
+  selector:
+    matchLabels:
+      app: tenantwarden-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels:
+        app: tenantwarden-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/metrics"
+    spec:
+      serviceAccountName: tenantwarden
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: api
+          image: "{{ .Values.global.imageRegistry }}/api:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name:  ASPNETCORE_URLS
+              value: http://+:8080
+            - name:  ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name:  ConnectionStrings__Postgres
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.postgresSecret }}
+                  key: connectionString
+            - name:  ConnectionStrings__Redis
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.redisSecret }}
+                  key: connectionString
+            - name:  Auth__Jwt__SigningKey
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.jwtSecret }}
+                  key: signingKey
+            - name:  Auth__AzureAd__ClientId
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.azureSecret }}
+                  key: clientId
+            - name:  Auth__AzureAd__ClientSecret
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.azureSecret }}
+                  key: clientSecret
+            - name:  Auth__AzureAd__TenantId
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.azureSecret }}
+                  key: tenantId
+          resources: {{- toYaml $svc.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenantwarden-api
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: tenantwarden-api
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+{{- if $svc.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tenantwarden-api
+  namespace: {{ .Release.Namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tenantwarden-api
+  minReplicas: {{ $svc.autoscaling.minReplicas }}
+  maxReplicas: {{ $svc.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.autoscaling.targetCPU }}
+{{- end }}
+{{- end }}

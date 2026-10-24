@@ -1,0 +1,48 @@
+# TenantWarden Agent Configuration
+# Default location: /etc/tenantwarden/agent.yaml
+# Override with env vars: TENANTWARDEN_GATEWAY_URL, TENANTWARDEN_AGENT_TOKEN, etc.
+
+gateway:
+  url: wss://your-domain.com:4433/agent/ws    # TenantWarden agent gateway WebSocket URL
+  reconnect_interval: 5s
+  max_reconnect_attempts: 20
+
+agent:
+  token: ""                       # Registration token (set via env TENANTWARDEN_AGENT_TOKEN)
+  heartbeat_interval: 30          # Seconds between heartbeats
+  collect_interval: 60            # Seconds between metric collections
+
+tls:
+  ca_file:   /etc/tenantwarden/certs/ca.crt         # CA cert to verify gateway
+  cert_file: /etc/tenantwarden/certs/agent.crt      # Agent mTLS cert
+  key_file:  /etc/tenantwarden/certs/agent.key      # Agent mTLS key
+
+collectors:
+  system:
+    enabled: true
+  processes:
+    enabled: false                # Set true to include running process list
+  services:
+    enabled: true
+  logs:
+    enabled: true
+    sources:
+      - type: eventlog            # Windows: eventlog | Linux: syslog / journald
+        channels: [System, Security, Application]
+  docker:
+    enabled: true
+    socket: /var/run/docker.sock
+  certificates:
+    enabled: true
+    paths:
+      - /etc/ssl/certs            # Linux
+      - "C:\\Windows\\System32\\certstore"  # Windows (placeholder)
+  network:
+    enabled: true
+  software:
+    enabled: false                # Installed software inventory
+
+log:
+  level: info                     # debug | info | warn | error
+  format: json                    # json | text
+  output: stdout                  # stdout | /var/log/tenantwarden-agent.log

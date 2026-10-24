@@ -1,0 +1,194 @@
+# TenantWarden Enterprise — Helm chart values
+# Override these in values-production.yaml or via --set flags.
+
+global:
+  imageRegistry: ghcr.io/tenantwarden
+  imageTag:      "1.0.0"
+  pullPolicy:    IfNotPresent
+  storageClass:  standard
+
+  # Set to your actual domain
+  domain: tenantwarden.example.com
+
+  # Existing secret names (create before deploying)
+  postgresSecret:   tenantwarden-postgres-secret
+  redisSecret:      tenantwarden-redis-secret
+  clickhouseSecret: tenantwarden-clickhouse-secret
+  minioSecret:      tenantwarden-minio-secret
+  azureSecret:      tenantwarden-azure-secret
+  jwtSecret:        tenantwarden-jwt-secret
+
+##############################################################################
+# Gateway (Nginx ingress)
+##############################################################################
+gateway:
+  enabled:  true
+  replicas: 2
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits:   { cpu: "500m", memory: "256Mi" }
+
+##############################################################################
+# Frontend
+##############################################################################
+frontend:
+  enabled:  true
+  replicas: 2
+  image:    frontend
+  resources:
+    requests: { cpu: "50m",  memory: "64Mi"  }
+    limits:   { cpu: "200m", memory: "128Mi" }
+
+##############################################################################
+# API
+##############################################################################
+api:
+  enabled:  true
+  replicas: 3
+  image:    api
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits:   { cpu: "1",    memory: "1Gi"   }
+  autoscaling:
+    enabled:     true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU:   70
+
+##############################################################################
+# Auth Service
+##############################################################################
+authService:
+  enabled:  true
+  replicas: 2
+  image:    auth-service
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "500m", memory: "512Mi" }
+
+##############################################################################
+# Collector Service
+##############################################################################
+collectorService:
+  enabled:  true
+  replicas: 2
+  image:    collector-service
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "500m", memory: "512Mi" }
+  config:
+    collectIntervalSeconds: 900
+    graphBatchSize:         20
+
+##############################################################################
+# Alert Engine
+##############################################################################
+alertEngine:
+  enabled:  true
+  replicas: 2
+  image:    alert-engine
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "500m", memory: "512Mi" }
+
+##############################################################################
+# Analytics Engine
+##############################################################################
+analyticsEngine:
+  enabled:  true
+  replicas: 2
+  image:    analytics-engine
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits:   { cpu: "1",    memory: "1Gi"   }
+
+##############################################################################
+# Notification Service
+##############################################################################
+notificationService:
+  enabled:  true
+  replicas: 2
+  image:    notification-service
+  resources:
+    requests: { cpu: "50m",  memory: "128Mi" }
+    limits:   { cpu: "250m", memory: "256Mi" }
+
+##############################################################################
+# Agent Gateway
+##############################################################################
+agentGateway:
+  enabled:  true
+  replicas: 3
+  image:    agent-gateway
+  service:
+    type:     LoadBalancer
+    port:     4433
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits:   { cpu: "1",    memory: "1Gi"   }
+  autoscaling:
+    enabled:     true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPU:   60
+
+##############################################################################
+# PostgreSQL (sub-chart: bitnami/postgresql)
+##############################################################################
+postgresql:
+  enabled: true
+  auth:
+    database:       tenantwarden
+    existingSecret: tenantwarden-postgres-secret
+  primary:
+    persistence:
+      size: 50Gi
+    resources:
+      requests: { cpu: "500m", memory: "1Gi" }
+      limits:   { cpu: "2",    memory: "4Gi" }
+
+##############################################################################
+# Redis (sub-chart: bitnami/redis)
+##############################################################################
+redis:
+  enabled: true
+  auth:
+    existingSecret:     tenantwarden-redis-secret
+    existingSecretKey:  password
+  master:
+    persistence:
+      size: 8Gi
+    resources:
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits:   { cpu: "500m", memory: "512Mi" }
+
+##############################################################################
+# Ingress
+##############################################################################
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  tls:
+    - secretName: tenantwarden-tls
+      hosts:
+        - "{{ .Values.global.domain }}"
+
+##############################################################################
+# Observability
+##############################################################################
+prometheus:
+  enabled: true
+  retention: 30d
+
+grafana:
+  enabled:       true
+  adminPassword: changeme   # override via secret in production
+
+loki:
+  enabled: true
+  retention: 30d

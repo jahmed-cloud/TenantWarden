@@ -1,0 +1,73 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tenantwarden
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- range $k, $v := .Values.ingress.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ tpl . $ }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.global.domain }}
+      http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service: { name: tenantwarden-auth, port: { number: 80 } }
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: { name: tenantwarden-api, port: { number: 80 } }
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service: { name: tenantwarden-api, port: { number: 80 } }
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: tenantwarden-frontend, port: { number: 80 } }
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenantwarden
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tenantwarden
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenantwarden
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: tenantwarden
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: tenantwarden
+  apiGroup: rbac.authorization.k8s.io
