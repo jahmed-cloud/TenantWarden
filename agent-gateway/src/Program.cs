@@ -114,7 +114,17 @@ IResult? RejectUnlessInternal(HttpContext ctx)
 
 // ── In-memory agent connection registry ───────────────────────────────────────
 
-var connections = new ConcurrentDictionary<string, WebSocket>();
+var connections = new ConcurrentDictionary<string, AgentConnection>();
+
+// Monitoring profiles: the API stores each tenant's profile in Redis (agent_profile:{tenantId}) and
+// publishes the tenant id on tenantwarden:agent_profile when it changes. Push it to that tenant's agents.
+var profileSubscriber = app.Services.GetRequiredService<IConnectionMultiplexer>().GetSubscriber();
+await profileSubscriber.SubscribeAsync(RedisChannel.Literal("tenantwarden:agent_profile"), (channel, tenant) =>
+{
+    var redisDb = app.Services.GetRequiredService<IConnectionMultiplexer>().GetDatabase();
+    foreach (var conn in connections.Values.Where(c => c.TenantId == tenant.ToString()))
+        _ = PushProfileAsync(conn, redisDb);
+});
 
 // ── WebSocket endpoint ────────────────────────────────────────────────────────
 
@@ -178,7 +188,9 @@ app.Map("/ws", async context =>
         Log.Warning("Agent {AgentId} sent X-Tenant-ID {Claimed} but its token is for {TenantId} — using the token", agentId, claimedTenant, tenantId);
 
     var ws = await context.WebSockets.AcceptWebSocketAsync();
-    connections[agentId] = ws;
+    var connection = new AgentConnection(ws, tenantId);
+    connections[agentId] = connection;
+    await PushProfileAsync(connection, redis);
 
     Log.Information("Agent connected: {AgentId} tenant:{TenantId}", agentId, tenantId);
 
@@ -217,9 +229,11 @@ app.Map("/ws", async context =>
     catch (WebSocketException) { /* connection dropped */ }
     finally
     {
-        connections.TryRemove(agentId, out _);
+        // A newer connection for the same agent (reconnect, `status` probe) may have replaced
+        // this one; only the current connection clears the agent's state.
+        if (connections.TryRemove(KeyValuePair.Create(agentId, connection)))
+            await redis.KeyDeleteAsync($"agent_heartbeat:{agentId}");
         Log.Information("Agent disconnected: {AgentId}", agentId);
-        await redis.KeyDeleteAsync($"agent_heartbeat:{agentId}");
     }
 });
 
@@ -229,12 +243,11 @@ app.MapPost("/command/{agentId}", async (string agentId, HttpContext ctx) =>
 {
     if (RejectUnlessInternal(ctx) is { } rejected) return rejected;
 
-    if (!connections.TryGetValue(agentId, out var ws) || ws.State != WebSocketState.Open)
+    if (!connections.TryGetValue(agentId, out var conn) || conn.Socket.State != WebSocketState.Open)
         return Results.NotFound(new { error = "Agent not connected" });
 
-    var body    = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
-    var payload = Encoding.UTF8.GetBytes(body);
-    await ws.SendAsync(payload, WebSocketMessageType.Text, true, CancellationToken.None);
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    await conn.SendAsync(body);
     return Results.Ok(new { sent = true });
 });
 
@@ -273,6 +286,14 @@ static async Task HandleAgentMessage(string agentId, string tenantId, string jso
                 await redis.PublishAsync(RedisChannel.Literal("tenantwarden:agent_events"), verified);
                 break;
 
+            case "inventory":
+                await redis.PublishAsync(RedisChannel.Literal("tenantwarden:agent_inventory"), verified);
+                break;
+
+            case "check":
+                await redis.PublishAsync(RedisChannel.Literal("tenantwarden:agent_checks"), verified);
+                break;
+
             case "registration":
                 await redis.PublishAsync(RedisChannel.Literal("tenantwarden:agent_registration"), verified);
                 Log.Information("Agent registered: {AgentId}", agentId);
@@ -282,5 +303,45 @@ static async Task HandleAgentMessage(string agentId, string tenantId, string jso
     catch (JsonException ex)
     {
         Log.Warning(ex, "Malformed message from agent {AgentId}", agentId);
+    }
+}
+
+// ── Monitoring profile push ───────────────────────────────────────────────────
+
+static async Task PushProfileAsync(AgentConnection conn, IDatabase redis)
+{
+    try
+    {
+        var stored = await redis.StringGetAsync($"agent_profile:{conn.TenantId}");
+        var message = new JsonObject
+        {
+            ["type"]      = "config",
+            ["timestamp"] = DateTime.UtcNow.ToString("o"),
+            ["payload"]   = stored.HasValue ? JsonNode.Parse(stored.ToString()) : new JsonObject(),
+        };
+        await conn.SendAsync(message.ToJsonString());
+    }
+    catch (Exception ex) when (ex is RedisException or WebSocketException or JsonException or ObjectDisposedException)
+    {
+        Log.Warning("Monitoring profile not sent to an agent of tenant {TenantId}: {Error}", conn.TenantId, ex.Message);
+    }
+}
+
+/// <summary>A connected agent. WebSocket sends must not overlap, so they go through one lock.</summary>
+sealed class AgentConnection(WebSocket socket, string tenantId)
+{
+    private readonly SemaphoreSlim _send = new(1, 1);
+    public WebSocket Socket   { get; } = socket;
+    public string    TenantId { get; } = tenantId;
+
+    public async Task SendAsync(string json)
+    {
+        await _send.WaitAsync();
+        try
+        {
+            if (Socket.State == WebSocketState.Open)
+                await Socket.SendAsync(Encoding.UTF8.GetBytes(json), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        finally { _send.Release(); }
     }
 }
