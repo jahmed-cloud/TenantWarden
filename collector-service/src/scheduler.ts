@@ -76,6 +76,7 @@ export class CollectorScheduler {
 
             try {
               logger.info({ tenantId: tenant.id, name: tenant.displayName }, 'Collecting tenant')
+              tenant.clientSecret = decryptSecret(tenant.encryptedClientSecret)
               const data = await runCollectionCycle(tenant)
               await this.persistResults(tenant, data)
               logger.info({ tenantId: tenant.id }, 'Tenant collection complete')
@@ -99,16 +100,26 @@ export class CollectorScheduler {
     }
   }
 
-  private async loadActiveTenants(): Promise<TenantConfig[]> {
-    const { rows } = await this.db.query<TenantConfig>(`
-      SELECT
+  private static readonly TENANT_COLUMNS = `
         id,
         display_name    AS "displayName",
         azure_tenant_id AS "azureTenantId",
         client_id       AS "clientId",
         encrypted_client_secret AS "encryptedClientSecret",
-        encrypted_client_secret AS "clientSecret",
-        enabled_modules AS "enabledModules"
+        '' AS "clientSecret",
+        enabled_modules AS "enabledModules"`
+
+  /** One tenant with its decrypted secret — used by remediation (POST /remediate). */
+  async loadTenant(id: string): Promise<TenantConfig | null> {
+    const { rows } = await this.db.query<TenantConfig>(
+      `SELECT ${CollectorScheduler.TENANT_COLUMNS} FROM tenants WHERE id = $1`, [id])
+    return rows[0] ? { ...rows[0], clientSecret: decryptSecret(rows[0].encryptedClientSecret) } : null
+  }
+
+  // Secrets are decrypted per tenant during collection, so one bad secret only fails that tenant
+  private async loadActiveTenants(): Promise<TenantConfig[]> {
+    const { rows } = await this.db.query<TenantConfig>(`
+      SELECT ${CollectorScheduler.TENANT_COLUMNS}
       FROM tenants
       -- Include 'error' tenants so they auto-recover once credentials/permissions
       -- are fixed. Errored tenants are retried at most every 30 minutes.
@@ -116,11 +127,12 @@ export class CollectorScheduler {
          OR (status = 'error' AND (last_sync_at IS NULL OR last_sync_at < NOW() - INTERVAL '30 minutes'))
       ORDER BY display_name
     `)
-    return rows.map(t => ({ ...t, clientSecret: decryptSecret(t.encryptedClientSecret) }))
+    return rows
   }
 
   private async persistResults(tenant: TenantConfig, data: Awaited<ReturnType<typeof runCollectionCycle>>) {
     const client = await this.db.connect()
+    const newAlerts: unknown[] = []
     try {
       await client.query('BEGIN')
 
@@ -243,17 +255,58 @@ export class CollectorScheduler {
            ss.createdDateTime ?? new Date().toISOString()])
       }
 
+      // ── Defender XDR incidents → security_incidents + one alert per active high/medium incident ──
+      for (const inc of (data.incidents as any[])) {
+        await client.query(`
+          INSERT INTO security_incidents
+            (tenant_id, incident_id, display_name, severity, status, classification, determination,
+             assigned_to, incident_web_url, created_at, last_update_at, synced_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+          ON CONFLICT (tenant_id, incident_id) DO UPDATE SET
+            display_name = EXCLUDED.display_name, severity = EXCLUDED.severity, status = EXCLUDED.status,
+            classification = EXCLUDED.classification, determination = EXCLUDED.determination,
+            assigned_to = EXCLUDED.assigned_to, incident_web_url = EXCLUDED.incident_web_url,
+            last_update_at = EXCLUDED.last_update_at, synced_at = NOW()`,
+          [tenant.id, String(inc.id), inc.displayName ?? 'Untitled incident', (inc.severity ?? 'unknown').toLowerCase(),
+           inc.status ?? 'active', inc.classification ?? null, inc.determination ?? null, inc.assignedTo ?? null,
+           inc.incidentWebUrl ?? null, inc.createdDateTime ?? new Date().toISOString(), inc.lastUpdateDateTime ?? null])
+
+        const externalId = `defender:${inc.id}`
+        if (inc.status === 'resolved') {
+          await client.query(`
+            UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(),
+                   resolution = 'Resolved in Microsoft Defender XDR'
+            WHERE tenant_id = $1 AND external_id = $2 AND status <> 'resolved'`, [tenant.id, externalId])
+          continue
+        }
+        const severity = (inc.severity ?? '').toLowerCase()
+        if (severity !== 'high' && severity !== 'medium') continue
+        const { rows } = await client.query(`
+          INSERT INTO alerts (tenant_id, title, description, severity, status, source, category,
+                              recommended_action, external_id, metadata)
+          SELECT $1, $2, $3, $4::alert_severity, 'active', 'defender', 'incident', $5, $6, $7::jsonb
+          WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE tenant_id = $1 AND external_id = $6)
+          RETURNING id, tenant_id AS "tenantId", title, description, severity::text AS severity, status::text AS status,
+                    source::text AS source, category, affected_users AS "affectedUsers",
+                    recommended_action AS "recommendedAction", created_at AS "createdAt"`,
+          [tenant.id, `Defender incident: ${inc.displayName ?? inc.id}`,
+           `Microsoft Defender XDR raised a ${severity}-severity incident${inc.assignedTo ? `, assigned to ${inc.assignedTo}` : ''}.`,
+           severity, 'Open the incident in Microsoft Defender XDR, review its alerts and evidence, and assign an owner.',
+           externalId, JSON.stringify({ incidentId: inc.id, webUrl: inc.incidentWebUrl ?? null })])
+        if (rows[0]) newAlerts.push(rows[0])
+      }
+
       // ── Update tenant counts + sync status ──────────────────────────────
       await client.query(`
         UPDATE tenants SET
-          user_count   = $2,
+          user_count   = COALESCE($2, user_count),
           device_count = $3,
           last_sync_at = NOW(),
           last_sync_error = NULL,
           status       = 'active',
           updated_at   = NOW()
         WHERE id = $1`,
-        [tenant.id, data.riskyUsers.length, (data.devices as any[]).length])
+        [tenant.id, data.userCount ?? null, (data.devices as any[]).length])
 
       // ── Historical snapshot for trend charts ────────────────────────────
       await client.query(`
@@ -272,6 +325,10 @@ export class CollectorScheduler {
       `, [tenant.id])
 
       await client.query('COMMIT')
+
+      // Only after commit: notification-service dispatches each new alert to the tenant's channels
+      for (const alert of newAlerts)
+        await this.redis.publish('tenantwarden:alerts', JSON.stringify({ tenantId: tenant.id, alert }))
     } catch (err) {
       await client.query('ROLLBACK')
       throw err

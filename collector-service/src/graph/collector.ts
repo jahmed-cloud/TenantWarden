@@ -106,7 +106,9 @@ export async function collectCAPolicies(client: Client): Promise<unknown[]> {
 
 export async function collectDefenderIncidents(client: Client): Promise<unknown[]> {
   const result: unknown[] = []
-  let url: string | undefined = "/security/incidents?$filter=status ne 'resolved'&$top=50"
+  // Everything touched in the last 30 days — resolved incidents too, so their alerts can be closed
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  let url: string | undefined = `/security/incidents?$filter=lastUpdateDateTime ge ${since}&$top=50`
 
   while (url) {
     const page = await pRetry(
@@ -210,6 +212,11 @@ export async function runCollectionCycle(tenant: TenantConfig) {
     }
   }
 
+  // Modules the tenant enabled when it was connected (empty = everything)
+  const modules = new Set((tenant.enabledModules ?? []).map(m => m.toLowerCase()))
+  const on = (m: string) => modules.size === 0 || modules.has(m)
+  const skip = <T>(fallback: T) => Promise.resolve(fallback)
+
   const [
     riskyUsers,
     riskySignIns,
@@ -219,21 +226,55 @@ export async function runCollectionCycle(tenant: TenantConfig) {
     incidents,
     serviceHealth,
     authMethods,
+    userCount,
   ] = await Promise.all([
-    limit(() => settle('riskyUsers',    () => collectRiskyUsers(client),       [] as RiskyUser[])),
-    limit(() => settle('riskySignIns',  () => collectRiskySignIns(client),     [] as unknown[])),
-    limit(() => settle('devices',       () => collectDeviceCompliance(client), [] as DeviceComplianceResult[])),
-    limit(() => settle('secureScore',   () => collectSecureScore(client),      null as unknown)),
-    limit(() => settle('caPolicies',    () => collectCAPolicies(client),       [] as unknown[])),
-    limit(() => settle('incidents',     () => collectDefenderIncidents(client),[] as unknown[])),
-    limit(() => settle('serviceHealth', () => collectServiceHealth(client),    [] as unknown[])),
-    limit(() => settle('authMethods',   () => collectAuthMethodRegistrations(client), [] as AuthMethodUser[])),
+    on('identity') ? limit(() => settle('riskyUsers',   () => collectRiskyUsers(client),       [] as RiskyUser[])) : skip([] as RiskyUser[]),
+    on('identity') ? limit(() => settle('riskySignIns', () => collectRiskySignIns(client),     [] as unknown[]))   : skip([] as unknown[]),
+    on('intune')   ? limit(() => settle('devices',      () => collectDeviceCompliance(client), [] as DeviceComplianceResult[])) : skip([] as DeviceComplianceResult[]),
+    on('defender') ? limit(() => settle('secureScore',  () => collectSecureScore(client),      null as unknown))   : skip(null as unknown),
+    on('identity') ? limit(() => settle('caPolicies',   () => collectCAPolicies(client),       [] as unknown[]))   : skip([] as unknown[]),
+    on('defender') ? limit(() => settle('incidents',    () => collectDefenderIncidents(client),[] as unknown[]))   : skip([] as unknown[]),
+    limit(() => settle('serviceHealth', () => collectServiceHealth(client), [] as unknown[])),
+    on('identity') ? limit(() => settle('authMethods',  () => collectAuthMethodRegistrations(client), [] as AuthMethodUser[])) : skip([] as AuthMethodUser[]),
+    on('identity') ? limit(() => settle('userCount',    () => collectUserCount(client), null as number | null)) : skip(null as number | null),
   ])
 
   logger.info(
-    { tenantId: tenant.id, riskyUsers: riskyUsers.length, devices: devices.length },
+    { tenantId: tenant.id, riskyUsers: riskyUsers.length, devices: devices.length, incidents: incidents.length, userCount },
     'collection cycle complete',
   )
 
-  return { riskyUsers, riskySignIns, devices, secureScore, caPolicies, incidents, serviceHealth, authMethods }
+  return { riskyUsers, riskySignIns, devices, secureScore, caPolicies, incidents, serviceHealth, authMethods, userCount }
+}
+
+// ─── Total user count (needs User.Read.All) ──────────────────────────────────
+
+export async function collectUserCount(client: Client): Promise<number | null> {
+  const n = await pRetry(
+    () => client.api('/users/$count').header('ConsistencyLevel', 'eventual').get(),
+    { retries: 2 },
+  )
+  const count = typeof n === 'number' ? n : parseInt(String(n), 10)
+  return Number.isFinite(count) ? count : null
+}
+
+// ─── Identity remediation ─────────────────────────────────────────────────────
+// Requires IdentityRiskyUser.ReadWrite.All (dismiss / confirm) and User.RevokeSessions.All (revoke).
+
+export type RemediationAction = 'dismiss' | 'confirm-compromised' | 'revoke-sessions'
+
+export async function remediate(tenant: TenantConfig, action: RemediationAction, userId: string): Promise<void> {
+  const client = createGraphClient(tenant)
+  switch (action) {
+    case 'dismiss':
+      await client.api('/identityProtection/riskyUsers/dismiss').post({ userIds: [userId] })
+      break
+    case 'confirm-compromised':
+      await client.api('/identityProtection/riskyUsers/confirmCompromised').post({ userIds: [userId] })
+      break
+    case 'revoke-sessions':
+      await client.api(`/users/${encodeURIComponent(userId)}/revokeSignInSessions`).post({})
+      break
+  }
+  logger.info({ tenantId: tenant.id, action, userId }, 'remediation executed')
 }
