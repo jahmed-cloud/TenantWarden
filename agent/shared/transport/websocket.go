@@ -24,6 +24,9 @@ const (
 	MsgEvent        MessageType = "event"
 	MsgAlert        MessageType = "alert"
 	MsgRegistration MessageType = "registration"
+	MsgInventory    MessageType = "inventory"
+	MsgCheck        MessageType = "check"
+	MsgConfig       MessageType = "config" // gateway → agent: the tenant's monitoring profile
 	MsgAck          MessageType = "ack"
 	MsgCommand      MessageType = "command"
 )
@@ -58,6 +61,8 @@ type WSTransport struct {
 	maxReconnect   int
 	sendCh         chan Message
 	cmdHandlers    map[string]CommandHandler
+	configHandler  func(json.RawMessage)
+	onConnect      func()
 	done           chan struct{}
 }
 
@@ -72,6 +77,7 @@ func NewWSTransport(opts TransportOptions) *WSTransport {
 		keyFile:        opts.KeyFile,
 		caFile:         opts.CAFile,
 		log:            opts.Log,
+		onConnect:      opts.OnConnect,
 		reconnectDelay: 5 * time.Second,
 		maxReconnect:   20,
 		sendCh:         make(chan Message, 256),
@@ -89,11 +95,18 @@ type TransportOptions struct {
 	KeyFile    string
 	CAFile     string
 	Log        *zap.Logger
+	// OnConnect runs after every successful (re)connect, e.g. to re-send registration
+	OnConnect  func()
 }
 
 // RegisterCommandHandler registers a handler for a specific gateway command.
 func (t *WSTransport) RegisterCommandHandler(cmd string, h CommandHandler) {
 	t.cmdHandlers[cmd] = h
+}
+
+// OnConfig sets the handler for monitoring profiles pushed by the gateway.
+func (t *WSTransport) OnConfig(h func(json.RawMessage)) {
+	t.configHandler = h
 }
 
 // Send queues a message for delivery. Non-blocking; drops if queue is full.
@@ -116,6 +129,16 @@ func (t *WSTransport) Send(msg Message) bool {
 func (t *WSTransport) Connect(ctx context.Context) error {
 	go t.loop(ctx)
 	return nil
+}
+
+// Probe opens and closes one connection to check the URL, TLS settings and token.
+func Probe(ctx context.Context, opts TransportOptions) error {
+	t := NewWSTransport(opts)
+	if err := t.connect(ctx); err != nil {
+		return err
+	}
+	t.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "probe"))
+	return t.conn.Close()
 }
 
 // Close shuts down the transport.
@@ -152,6 +175,9 @@ func (t *WSTransport) loop(ctx context.Context) {
 
 		attempts = 0
 		t.log.Info("connected to gateway")
+		if t.onConnect != nil {
+			t.onConnect()
+		}
 
 		if err := t.readWriteLoop(ctx); err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
@@ -179,8 +205,17 @@ func (t *WSTransport) connect(ctx context.Context) error {
 	header.Set("X-Agent-ID",    t.agentID)
 	header.Set("X-Tenant-ID",   t.tenantID)
 
-	conn, _, err := dialer.DialContext(ctx, t.gatewayURL, header)
+	conn, resp, err := dialer.DialContext(ctx, t.gatewayURL, header)
 	if err != nil {
+		if resp != nil {
+			switch resp.StatusCode {
+			case http.StatusUnauthorized:
+				return fmt.Errorf("enrollment token rejected (HTTP 401): it is expired, revoked or for another platform")
+			case http.StatusForbidden:
+				return fmt.Errorf("agent refused (HTTP 403): this agent ID is bound to another tenant")
+			}
+			return fmt.Errorf("%w (HTTP %d)", err, resp.StatusCode)
+		}
 		return err
 	}
 
@@ -263,6 +298,13 @@ func (t *WSTransport) handleIncoming(data []byte) {
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		t.log.Warn("malformed message from gateway", zap.Error(err))
+		return
+	}
+
+	if msg.Type == MsgConfig {
+		if t.configHandler != nil {
+			t.configHandler(msg.Payload)
+		}
 		return
 	}
 

@@ -1,48 +1,55 @@
-# TenantWarden Agent Configuration
-# Default location: /etc/tenantwarden/agent.yaml
-# Override with env vars: TENANTWARDEN_GATEWAY_URL, TENANTWARDEN_AGENT_TOKEN, etc.
+# TenantWarden agent configuration
+#
+# You normally don't write this by hand: `tenantwarden-agent register` checks the token and
+# the gateway, then writes it to /etc/tenantwarden/agent.yaml (Linux) or
+# C:\ProgramData\TenantWarden\agent.yaml (Windows).
+#
+# Every key can also come from the environment: TENANTWARDEN_GATEWAY_URL,
+# TENANTWARDEN_AGENT_TOKEN, TENANTWARDEN_TLS_CA_FILE, TENANTWARDEN_AGENT_COLLECT_INTERVAL, ...
 
 gateway:
-  url: wss://your-domain.com:4433/agent/ws    # TenantWarden agent gateway WebSocket URL
-  reconnect_interval: 5s
-  max_reconnect_attempts: 20
+  # The portal's agent endpoint. /ws is appended unless the URL already ends with it.
+  #   through the portal gateway:  wss://portal.example.com/agent   (or ws://host:8090/agent)
+  #   straight to agent-gateway:   wss://portal.example.com:4433
+  url: "wss://portal.example.com/agent"
 
 agent:
-  token: ""                       # Registration token (set via env TENANTWARDEN_AGENT_TOKEN)
-  heartbeat_interval: 30          # Seconds between heartbeats
-  collect_interval: 60            # Seconds between metric collections
+  token: ""                    # enrollment token from the portal (Agents → Add agent)
+  tags: [web, prod]            # lets monitoring-profile items target groups of hosts
+  heartbeat_interval: 30       # seconds
+  collect_interval: 60         # CPU, memory, disk, network throughput and connections
+  events_interval: 300         # OS event log: journald / Windows Event Log (0 disables)
+  logs_interval: 60            # custom and workload log files (0 disables)
+  discovery_interval: 300      # server roles (SQL Server, IIS, nginx …) and certificates (0 disables)
+  inventory_interval: 21600    # patches, encryption, firewall, antivirus, software (0 disables)
 
 tls:
-  ca_file:   /etc/tenantwarden/certs/ca.crt         # CA cert to verify gateway
-  cert_file: /etc/tenantwarden/certs/agent.crt      # Agent mTLS cert
-  key_file:  /etc/tenantwarden/certs/agent.key      # Agent mTLS key
-
-collectors:
-  system:
-    enabled: true
-  processes:
-    enabled: false                # Set true to include running process list
-  services:
-    enabled: true
-  logs:
-    enabled: true
-    sources:
-      - type: eventlog            # Windows: eventlog | Linux: syslog / journald
-        channels: [System, Security, Application]
-  docker:
-    enabled: true
-    socket: /var/run/docker.sock
-  certificates:
-    enabled: true
-    paths:
-      - /etc/ssl/certs            # Linux
-      - "C:\\Windows\\System32\\certstore"  # Windows (placeholder)
-  network:
-    enabled: true
-  software:
-    enabled: false                # Installed software inventory
+  # CA that signed the gateway certificate, for self-signed setups.
+  # `make certs` creates one; the portal serves it at /downloads/ca.crt.
+  ca_file: ""
 
 log:
-  level: info                     # debug | info | warn | error
-  format: json                    # json | text
-  output: stdout                  # stdout | /var/log/tenantwarden-agent.log
+  level: info                  # debug | info | warn | error
+  format: json                 # json | text
+
+# Extra monitoring on this host. The portal's monitoring profile (Agents → Monitoring profile) is
+# merged on top; on a name clash the portal wins. See docs/AGENT.md.
+monitoring:
+  logs:
+    - name: myapp                  # events arrive with source "log:myapp"
+      path: /var/log/myapp/*.log   # file or glob; Windows: 'C:\App\logs\*.log'
+      include: "ERROR|FATAL"       # regex (case-insensitive); only matching lines are sent
+      exclude: "healthcheck"
+      level: auto                  # auto | critical | error | warning | info
+  event_channels:                  # Windows only
+    - channel: Microsoft-Windows-PowerShell/Operational
+      ids: [4104]
+      level: warning
+  journal_units:                   # Linux only
+    - unit: myapp.service
+      level: warning
+  checks:
+    - name: intranet
+      type: http                   # tcp (host:port) | http (URL) | dns (hostname)
+      target: https://intranet.example.com/health
+      interval_seconds: 60

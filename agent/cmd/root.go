@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -9,9 +12,9 @@ import (
 )
 
 var (
-	cfgFile   string
-	buildVer  string
-	buildTime string
+	cfgFile     string
+	buildVer    string
+	buildTime   string
 	buildCommit string
 )
 
@@ -24,39 +27,51 @@ func SetBuildInfo(version, time, commit string) {
 // RootCmd is the base command when called without any subcommands.
 var RootCmd = &cobra.Command{
 	Use:   "tenantwarden-agent",
-	Short: "TenantWarden infrastructure agent",
-	Long: `TenantWarden Agent — collects system metrics, security events,
-and telemetry and streams them securely to the TenantWarden platform.`,
+	Short: "TenantWarden endpoint agent",
+	Long: `TenantWarden Agent: streams system metrics, security events and a host inventory
+to your TenantWarden portal.
+
+Get an enrollment token from the portal (Agents → Add agent), then:
+
+  tenantwarden-agent register --gateway-url <url> --agent-token <token> --install`,
+	SilenceUsage:  true,
+	SilenceErrors: true, // main prints the error once
 }
 
-// startCmd runs the agent daemon.
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the TenantWarden agent",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runAgent()
-	},
+	Short: "Run the agent in the foreground (or as the installed service)",
+	RunE:  func(cmd *cobra.Command, args []string) error { return runStart() },
 }
 
-// registerCmd registers this agent with the platform.
 var registerCmd = &cobra.Command{
 	Use:   "register",
-	Short: "Register this agent with the TenantWarden platform",
+	Short: "Check the enrollment token and gateway, then save the configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runRegister()
+		install, _ := cmd.Flags().GetBool("install")
+		resetID, _ := cmd.Flags().GetBool("reset-id")
+		return runRegister(install, resetID)
 	},
 }
 
-// statusCmd prints current agent status.
+var installCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install and start the agent as a service (systemd or Windows service)",
+	RunE:  func(cmd *cobra.Command, args []string) error { return installService(configPath()) },
+}
+
+var uninstallCmd = &cobra.Command{
+	Use:   "uninstall",
+	Short: "Stop and remove the agent service (keeps the configuration)",
+	RunE:  func(cmd *cobra.Command, args []string) error { return uninstallService() },
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show agent status",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runStatus()
-	},
+	Short: "Show the configuration and test the connection to the gateway",
+	RunE:  func(cmd *cobra.Command, args []string) error { return runStatus() },
 }
 
-// versionCmd prints build information.
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
@@ -65,38 +80,52 @@ var versionCmd = &cobra.Command{
 		fmt.Printf("  Version:    %s\n", buildVer)
 		fmt.Printf("  Build time: %s\n", buildTime)
 		fmt.Printf("  Commit:     %s\n", buildCommit)
+		fmt.Printf("  Platform:   %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	},
 }
 
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: /etc/tenantwarden/agent.yaml)")
-	RootCmd.PersistentFlags().String("gateway-url", "", "TenantWarden agent gateway URL (e.g. wss://host:4433)")
-	RootCmd.PersistentFlags().String("agent-token", "", "Agent registration token")
-	RootCmd.PersistentFlags().String("log-level", "info", "Log level: debug|info|warn|error")
-	RootCmd.PersistentFlags().Bool("no-color", false, "Disable colored log output")
+	pf := RootCmd.PersistentFlags()
+	pf.StringVar(&cfgFile, "config", "", "config file (default: "+filepath.Join(configDir(), "agent.yaml")+")")
+	pf.String("gateway-url", "", "agent gateway URL, e.g. wss://portal.example.com/agent or ws://host:8090/agent")
+	pf.String("agent-token", "", "enrollment token from the portal (Agents → Add agent)")
+	pf.String("ca-file", "", "CA certificate that signed the gateway's TLS certificate (self-signed setups)")
+	pf.String("log-level", "info", "log level: debug|info|warn|error")
 
-	_ = viper.BindPFlag("gateway.url",    RootCmd.PersistentFlags().Lookup("gateway-url"))
-	_ = viper.BindPFlag("agent.token",    RootCmd.PersistentFlags().Lookup("agent-token"))
-	_ = viper.BindPFlag("log.level",      RootCmd.PersistentFlags().Lookup("log-level"))
+	_ = viper.BindPFlag("gateway.url", pf.Lookup("gateway-url"))
+	_ = viper.BindPFlag("agent.token", pf.Lookup("agent-token"))
+	_ = viper.BindPFlag("tls.ca_file", pf.Lookup("ca-file"))
+	_ = viper.BindPFlag("log.level",   pf.Lookup("log-level"))
 
-	startCmd.Flags().Int("heartbeat-interval", 30, "Heartbeat interval in seconds")
-	startCmd.Flags().Int("collect-interval", 60, "Metrics collection interval in seconds")
-	startCmd.Flags().Bool("collect-events", true, "Collect system event logs")
-	startCmd.Flags().Bool("collect-processes", false, "Collect running process list")
+	sf := startCmd.Flags()
+	sf.Int("heartbeat-interval", 30, "seconds between heartbeats")
+	sf.Int("collect-interval", 60, "seconds between metric collections")
+	sf.Int("events-interval", 300, "seconds between event log reads (0 disables)")
+	sf.Int("inventory-interval", 21600, "seconds between inventory reports (0 disables)")
+	sf.Int("logs-interval", 60, "seconds between reads of custom and workload log files (0 disables)")
+	sf.Int("discovery-interval", 300, "seconds between server-role discoveries (0 disables)")
+	_ = viper.BindPFlag("agent.heartbeat_interval", sf.Lookup("heartbeat-interval"))
+	_ = viper.BindPFlag("agent.collect_interval",   sf.Lookup("collect-interval"))
+	_ = viper.BindPFlag("agent.events_interval",    sf.Lookup("events-interval"))
+	_ = viper.BindPFlag("agent.inventory_interval", sf.Lookup("inventory-interval"))
+	_ = viper.BindPFlag("agent.logs_interval",      sf.Lookup("logs-interval"))
+	_ = viper.BindPFlag("agent.discovery_interval", sf.Lookup("discovery-interval"))
 
-	_ = viper.BindPFlag("agent.heartbeat_interval", startCmd.Flags().Lookup("heartbeat-interval"))
-	_ = viper.BindPFlag("agent.collect_interval",   startCmd.Flags().Lookup("collect-interval"))
+	registerCmd.Flags().Bool("install", false, "also install and start the agent as a service")
+	registerCmd.Flags().Bool("reset-id", false, "generate a new agent ID (needed to move a host to another tenant)")
+	registerCmd.Flags().StringSlice("tags", nil, "host tags for targeting monitoring-profile items, e.g. --tags sql,prod")
+	_ = viper.BindPFlag("agent.tags", registerCmd.Flags().Lookup("tags"))
 
-	RootCmd.AddCommand(startCmd, registerCmd, statusCmd, versionCmd)
+	RootCmd.AddCommand(startCmd, registerCmd, installCmd, uninstallCmd, statusCmd, versionCmd)
 }
 
 func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		viper.AddConfigPath("/etc/tenantwarden")
+		viper.AddConfigPath(configDir())
 		viper.AddConfigPath("$HOME/.tenantwarden")
 		viper.AddConfigPath(".")
 		viper.SetConfigName("agent")
@@ -108,7 +137,35 @@ func initConfig() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Printf("Using config: %s\n", viper.ConfigFileUsed())
+	_ = viper.ReadInConfig()
+}
+
+// configDir is where register writes agent.yaml and where the agent keeps its ID and state.
+func configDir() string {
+	if runtime.GOOS == "windows" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			return filepath.Join(pd, "TenantWarden")
+		}
+		return `C:\ProgramData\TenantWarden`
 	}
+	return "/etc/tenantwarden"
+}
+
+// configPath is the config file in use: --config, the file viper found, or the default.
+func configPath() string {
+	if cfgFile != "" {
+		if abs, err := filepath.Abs(cfgFile); err == nil {
+			return abs
+		}
+		return cfgFile
+	}
+	if used := viper.ConfigFileUsed(); used != "" {
+		return used
+	}
+	return filepath.Join(configDir(), "agent.yaml")
+}
+
+// stateDir holds the agent ID and the event-log bookmark, next to the config file.
+func stateDir() string {
+	return filepath.Dir(configPath())
 }

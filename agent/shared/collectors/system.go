@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -28,6 +30,30 @@ type SystemMetrics struct {
 	Memory  MemoryMetrics  `json:"memory"`
 	Disks   []DiskMetrics  `json:"disks"`
 	Network []NetMetrics   `json:"network"`
+
+	// Throughput since the previous sample (absent on the first one) and TCP connection counts
+	NetworkRates *NetRates   `json:"network_rates,omitempty"`
+	Connections  *ConnCounts `json:"connections,omitempty"`
+}
+
+type NetRates struct {
+	RxBps      uint64      `json:"rx_bps"`
+	TxBps      uint64      `json:"tx_bps"`
+	Interfaces []IfaceRate `json:"interfaces"`
+}
+
+type IfaceRate struct {
+	Interface string `json:"interface"`
+	RxBps     uint64 `json:"rx_bps"`
+	TxBps     uint64 `json:"tx_bps"`
+}
+
+type ConnCounts struct {
+	Established int `json:"established"`
+	Listen      int `json:"listen"`
+	TimeWait    int `json:"time_wait"`
+	CloseWait   int `json:"close_wait"`
+	Total       int `json:"total"`
 }
 
 type CPUMetrics struct {
@@ -68,9 +94,13 @@ type NetMetrics struct {
 	ErrOut       uint64 `json:"err_out"`
 }
 
-// SystemCollector gathers OS-level metrics.
+// SystemCollector gathers OS-level metrics. It keeps the previous network counters to turn
+// them into rates.
 type SystemCollector struct {
-	log *zap.Logger
+	log    *zap.Logger
+	mu     sync.Mutex
+	prev   map[string][2]uint64 // interface → {recv, sent}
+	prevAt time.Time
 }
 
 func NewSystemCollector(log *zap.Logger) *SystemCollector {
@@ -141,6 +171,7 @@ func (c *SystemCollector) Collect(ctx context.Context) (*SystemMetrics, error) {
 
 	// ── Network ───────────────────────────────────────────────────────────────
 	if ifaces, err := net.IOCountersWithContext(ctx, true); err == nil {
+		metrics.NetworkRates = c.rates(ifaces, metrics.CollectedAt)
 		for _, iface := range ifaces {
 			if iface.BytesRecv == 0 && iface.BytesSent == 0 {
 				continue // skip loopback / inactive
@@ -157,7 +188,60 @@ func (c *SystemCollector) Collect(ctx context.Context) (*SystemMetrics, error) {
 		}
 	}
 
+	if conns, err := connectionCounts(ctx); err == nil {
+		metrics.Connections = conns
+	} else {
+		c.log.Debug("connection counts unavailable", zap.Error(err))
+	}
+
 	return metrics, nil
+}
+
+// Interfaces that only carry traffic between local containers or VMs; counting them would
+// double the host's real throughput.
+func virtualInterface(name string) bool {
+	n := strings.ToLower(name)
+	if n == "lo" || strings.Contains(n, "loopback") {
+		return true
+	}
+	for _, prefix := range []string{"veth", "docker", "br-", "virbr", "cni", "flannel", "cali", "tunl", "kube-", "vxlan"} {
+		if strings.HasPrefix(n, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// rates turns cumulative counters into bytes/s since the previous sample.
+func (c *SystemCollector) rates(ifaces []net.IOCountersStat, now time.Time) *NetRates {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prev, prevAt := c.prev, c.prevAt
+	c.prev = map[string][2]uint64{}
+	for _, i := range ifaces {
+		c.prev[i.Name] = [2]uint64{i.BytesRecv, i.BytesSent}
+	}
+	c.prevAt = now
+	seconds := now.Sub(prevAt).Seconds()
+	if prev == nil || seconds < 1 {
+		return nil
+	}
+	r := &NetRates{}
+	for _, i := range ifaces {
+		last, ok := prev[i.Name]
+		// Counters reset when an interface restarts; skip that sample rather than report a spike
+		if !ok || virtualInterface(i.Name) || i.BytesRecv < last[0] || i.BytesSent < last[1] {
+			continue
+		}
+		rx := uint64(float64(i.BytesRecv-last[0]) / seconds)
+		tx := uint64(float64(i.BytesSent-last[1]) / seconds)
+		r.RxBps += rx
+		r.TxBps += tx
+		if rx > 0 || tx > 0 {
+			r.Interfaces = append(r.Interfaces, IfaceRate{Interface: i.Name, RxBps: rx, TxBps: tx})
+		}
+	}
+	return r
 }
 
 // Summary returns a short human-readable string for logging.

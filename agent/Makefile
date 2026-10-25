@@ -6,13 +6,13 @@ COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 LDFLAGS    := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.Commit=$(COMMIT) -s -w"
 OUTDIR     := dist
 
-.PHONY: all clean build windows linux linux-arm64 macos docker test
+.PHONY: all clean build windows linux linux-arm64 macos checksums docker test vet
 
-all: clean windows linux linux-arm64 macos
+all: clean vet windows linux linux-arm64 macos checksums
 
 clean:
-	rm -rf $(OUTDIR)
-	mkdir -p $(OUTDIR)
+	@# Empty the folder rather than delete it: the gateway container bind-mounts it
+	mkdir -p $(OUTDIR) && rm -rf $(OUTDIR)/*
 
 # ── Local build ───────────────────────────────────────────────────────────────
 build:
@@ -36,17 +36,18 @@ linux-arm64:
 		go build $(LDFLAGS) -o $(OUTDIR)/$(BINARY)-linux-arm64 .
 	@echo "→ $(OUTDIR)/$(BINARY)-linux-arm64"
 
-# ── macOS universal ───────────────────────────────────────────────────────────
+# ── macOS (Intel and Apple silicon) ───────────────────────────────────────────
 macos:
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 \
 		go build $(LDFLAGS) -o $(OUTDIR)/$(BINARY)-darwin-amd64 .
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
 		go build $(LDFLAGS) -o $(OUTDIR)/$(BINARY)-darwin-arm64 .
-	lipo -create -output $(OUTDIR)/$(BINARY)-darwin-universal \
-		$(OUTDIR)/$(BINARY)-darwin-amd64 \
-		$(OUTDIR)/$(BINARY)-darwin-arm64 2>/dev/null || \
-		cp $(OUTDIR)/$(BINARY)-darwin-amd64 $(OUTDIR)/$(BINARY)-darwin-universal
-	@echo "→ $(OUTDIR)/$(BINARY)-darwin-universal"
+	@echo "→ $(OUTDIR)/$(BINARY)-darwin-amd64, $(BINARY)-darwin-arm64"
+
+# ── SHA-256 checksums (served next to the binaries at /downloads/) ────────────
+checksums:
+	cd $(OUTDIR) && sha256sum $(BINARY)* > SHA256SUMS
+	@echo "→ $(OUTDIR)/SHA256SUMS"
 
 # ── Docker image ──────────────────────────────────────────────────────────────
 docker:
@@ -58,6 +59,11 @@ docker:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 test:
 	go test ./... -v -race -count=1
+
+vet:
+	GOOS=linux   go vet ./...
+	GOOS=windows go vet ./...
+	GOOS=darwin  go vet ./...
 
 lint:
 	golangci-lint run ./...
