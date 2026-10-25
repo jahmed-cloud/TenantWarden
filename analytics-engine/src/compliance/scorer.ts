@@ -122,6 +122,10 @@ export async function pruneHistory(db: Pool): Promise<void> {
     secure_scores:      { table: 'secure_scores',      col: 'recorded_at' },
     risky_signins:      { table: 'risky_signins',      col: 'occurred_at' },
     audit_logs:         { table: 'audit_logs',         col: 'created_at' },
+    service_health:     { table: 'service_health',     col: 'recorded_at' },
+    auth_method_summary:{ table: 'auth_method_summary', col: 'captured_at' },
+    agent_events:       { table: 'agent_events',       col: 'occurred_at' },
+    security_incidents: { table: 'security_incidents', col: 'synced_at' },
   }
   for (const { key, days } of rows) {
     const t = tableForKey[key]
