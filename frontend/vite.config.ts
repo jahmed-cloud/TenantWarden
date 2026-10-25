@@ -21,23 +21,18 @@ export default defineConfig({
         target: process.env.VITE_AUTH_URL ?? 'http://localhost:8081',
         changeOrigin: true,
       },
-      '/ws': {
-        target: process.env.VITE_WS_URL ?? 'ws://localhost:8080',
-        ws: true,
-        changeOrigin: true,
-      },
     },
   },
   build: {
     target:   'es2022',   // supports top-level await
     outDir:   'dist',
     sourcemap: false,
+    // The charts chunk (ECharts core + 4 chart types, ~180 kB gzipped) loads after sign-in
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'msal':         ['@azure/msal-browser', '@azure/msal-react'],
-          'charts':       ['echarts', 'echarts-for-react'],
           'query':        ['@tanstack/react-query'],
         },
       },

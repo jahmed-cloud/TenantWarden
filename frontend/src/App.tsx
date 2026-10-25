@@ -1,81 +1,98 @@
-import { lazy, Suspense } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { Navigate, Route, Routes } from 'react-router-dom'
+import { Loader2 } from 'lucide-react'
+import { refreshAccessToken } from '@/services/api/client'
+import { useMe, useTenants } from '@/services/api/hooks'
 import { useTenantWardenStore } from '@/store/tenantWardenStore'
-import { ChangePasswordModal } from '@/components/ChangePasswordModal'
-import { AppShell }  from '@/components/layout/AppShell'
-import { LoginPage } from '@/pages/OtherPages'
-import { useCurrentUser, useAlertCounts } from '@/hooks/useCurrentUser'
-import { useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { apiClient } from '@/services/api/client'
-import { useWebSocket } from '@/hooks/useWebSocket'
 import { useThemeSync } from '@/hooks/useThemeSync'
+import { AppShell } from '@/components/AppShell'
+import { ChangePasswordDialog } from '@/components/AccountDialogs'
+import { LoginPage } from '@/pages/LoginPage'
 
-// Lazy-loaded route pages — each becomes its own chunk, shrinking initial load
-const OverviewPage      = lazy(() => import('@/components/dashboard/OverviewPageFull').then(m => ({ default: m.OverviewPage })))
-const AlertsPageFull    = lazy(() => import('@/components/alerts/AlertsPageFull').then(m => ({ default: m.AlertsPageFull })))
-const IdentityPageFull  = lazy(() => import('@/components/identity/IdentityPageFull').then(m => ({ default: m.IdentityPageFull })))
-const AnalyticsPageFull = lazy(() => import('@/components/analytics/AnalyticsPageFull').then(m => ({ default: m.AnalyticsPageFull })))
-const AgentsPageFull    = lazy(() => import('@/components/agents/AgentsPageFull').then(m => ({ default: m.AgentsPageFull })))
-const AdminPageFull     = lazy(() => import('@/components/admin/AdminPageFull').then(m => ({ default: m.AdminPageFull })))
-const SecurityPage      = lazy(() => import('@/pages/OtherPages').then(m => ({ default: m.SecurityPage })))
-const TenantsPage       = lazy(() => import('@/pages/OtherPages').then(m => ({ default: m.TenantsPage })))
-const CompliancePage    = lazy(() => import('@/pages/OtherPages').then(m => ({ default: m.CompliancePage })))
-const ReportsPage       = lazy(() => import('@/pages/OtherPages').then(m => ({ default: m.ReportsPage })))
-const DevicesPage       = lazy(() => import('@/pages/AlertsAndMorePages').then(m => ({ default: m.DevicesPage })))
+// One chunk per page
+const page = <K extends string>(load: () => Promise<Record<K, React.ComponentType>>, name: K) =>
+  lazy(() => load().then((m) => ({ default: m[name] })))
+
+const OverviewPage   = page(() => import('@/pages/OverviewPage'), 'OverviewPage')
+const AlertsPage     = page(() => import('@/pages/AlertsPage'), 'AlertsPage')
+const AnalyticsPage  = page(() => import('@/pages/AnalyticsPage'), 'AnalyticsPage')
+const IdentityPage   = page(() => import('@/pages/IdentityPage'), 'IdentityPage')
+const SecurityPage   = page(() => import('@/pages/SecurityPage'), 'SecurityPage')
+const DevicesPage    = page(() => import('@/pages/DevicesPage'), 'DevicesPage')
+const CompliancePage = page(() => import('@/pages/CompliancePage'), 'CompliancePage')
+const AgentsPage     = page(() => import('@/pages/AgentsPage'), 'AgentsPage')
+const QueryPage      = page(() => import('@/pages/QueryPage'), 'QueryPage')
+const WorkloadsPage  = page(() => import('@/pages/WorkloadsPage'), 'WorkloadsPage')
+const NetworkPage    = page(() => import('@/pages/NetworkPage'), 'NetworkPage')
+const TenantsPage    = page(() => import('@/pages/TenantsPage'), 'TenantsPage')
+const ReportsPage    = page(() => import('@/pages/ReportsPage'), 'ReportsPage')
+const AdminPage      = page(() => import('@/pages/AdminPage'), 'AdminPage')
+
+function Splash() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-surface text-on-surface-variant">
+      <Loader2 className="animate-spin" />
+    </div>
+  )
+}
 
 function AuthenticatedApp() {
-  useThemeSync()
-
-  // Auto-select a tenant so data hooks (which require tenantId) start firing
-  // immediately — without this, every dashboard silently shows nothing until
-  // the user manually picks a tenant from the header dropdown.
-  const activeTenant    = useTenantWardenStore((s) => s.activeTenant)
+  const { data: me } = useMe(true)
+  const setCurrentUser = useTenantWardenStore((s) => s.setCurrentUser)
+  const currentUser = useTenantWardenStore((s) => s.currentUser)
+  const activeTenant = useTenantWardenStore((s) => s.activeTenant)
   const setActiveTenant = useTenantWardenStore((s) => s.setActiveTenant)
-  const { data: tenants } = useQuery({
-    queryKey: ['tenants'],
-    queryFn: async () => (await apiClient.get('/v1/tenants')).data as any[],
-  })
+  const { data: tenants } = useTenants()
+
+  useEffect(() => { if (me) setCurrentUser(me) }, [me, setCurrentUser])
+
+  // Keep a valid tenant selected so every page has data without a manual pick
   useEffect(() => {
-    if (!activeTenant && tenants && tenants.length > 0) {
-      setActiveTenant(tenants[0])
-    }
-  }, [activeTenant, tenants, setActiveTenant])
-   // applies .dark class to <html> — without this the theme toggle does nothing
-  useCurrentUser()
-  useAlertCounts()
-  useWebSocket()
+    if (!tenants) return
+    if (tenants.length === 0) { if (activeTenant) setActiveTenant(null); return }
+    if (!activeTenant || !tenants.some((t) => t.id === activeTenant.id))
+      setActiveTenant({ id: tenants[0].id, displayName: tenants[0].displayName })
+  }, [tenants, activeTenant, setActiveTenant])
+
+  const noTenants = tenants?.length === 0
+
   return (
     <AppShell>
-      <Suspense fallback={<div className="flex items-center justify-center h-64 text-sm text-gray-400">Loading…</div>}>
-      <Routes>
-        <Route path="/"           element={<Navigate to="/overview" replace />} />
-        <Route path="/overview"   element={<OverviewPage />} />
-        <Route path="/alerts"     element={<AlertsPageFull />} />
-        <Route path="/identity"   element={<IdentityPageFull />} />
-        <Route path="/security"   element={<SecurityPage />} />
-        <Route path="/devices"    element={<DevicesPage />} />
-        <Route path="/agents"     element={<AgentsPageFull />} />
-        <Route path="/tenants"    element={<TenantsPage />} />
-        <Route path="/analytics"  element={<AnalyticsPageFull />} />
-        <Route path="/compliance" element={<CompliancePage />} />
-        <Route path="/reports"    element={<ReportsPage />} />
-        <Route path="/admin"      element={<AdminPageFull />} />
-        <Route path="*"           element={<Navigate to="/overview" replace />} />
-      </Routes>
+      <Suspense fallback={<div className="flex justify-center py-24 text-on-surface-variant"><Loader2 className="animate-spin" /></div>}>
+        <Routes>
+          <Route path="/" element={<Navigate to={noTenants ? '/tenants' : '/overview'} replace />} />
+          <Route path="/overview" element={noTenants ? <Navigate to="/tenants" replace /> : <OverviewPage />} />
+          <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/identity" element={<IdentityPage />} />
+          <Route path="/security" element={<SecurityPage />} />
+          <Route path="/devices" element={<DevicesPage />} />
+          <Route path="/compliance" element={<CompliancePage />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/query" element={<QueryPage />} />
+          <Route path="/workloads" element={<WorkloadsPage />} />
+          <Route path="/network" element={<NetworkPage />} />
+          <Route path="/tenants" element={<TenantsPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="*" element={<Navigate to="/overview" replace />} />
+        </Routes>
       </Suspense>
+      <ChangePasswordDialog open={!!currentUser?.mustChangePassword} onClose={() => undefined} forced />
     </AppShell>
   )
 }
 
 export default function App() {
-  const hasSession   = useTenantWardenStore((s) => !!s.accessToken)
-  const mustChange   = useTenantWardenStore((s) => s.mustChangePassword || (s.currentUser as any)?.mustChangePassword)
-  if (!hasSession) return <LoginPage />
-  return (
-    <>
-      <AuthenticatedApp />
-      {mustChange && <ChangePasswordModal forced />}
-    </>
-  )
+  useThemeSync()
+  const token = useTenantWardenStore((s) => s.accessToken)
+  // On load, try the refresh cookie first so a reload doesn't mean signing in again
+  const [restoring, setRestoring] = useState(!token)
+  useEffect(() => {
+    if (!token) void refreshAccessToken().finally(() => setRestoring(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (restoring) return <Splash />
+  return token ? <AuthenticatedApp /> : <LoginPage />
 }

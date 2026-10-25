@@ -2,14 +2,104 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Colour roles as RGB triplets (see tailwind.config.js). Light is the default. */
 @layer base {
+  :root {
+    --primary: 31 91 216;
+    --on-primary: 255 255 255;
+    --primary-container: 219 227 255;
+    --on-primary-container: 0 25 77;
+    --secondary-container: 224 229 246;
+    --on-secondary-container: 21 27 44;
+
+    --surface: 248 249 253;
+    --surface-dim: 237 239 245;
+    --surface-container-lowest: 255 255 255;
+    --surface-container-low: 243 244 250;
+    --surface-container: 237 239 245;
+    --surface-container-high: 231 233 240;
+    --surface-container-highest: 225 227 234;
+    --on-surface: 26 28 34;
+    --on-surface-variant: 69 72 81;
+    --outline: 117 120 130;
+    --outline-variant: 198 200 210;
+    --inverse-surface: 47 48 54;
+    --inverse-on-surface: 241 240 247;
+
+    --error: 186 26 26;
+    --on-error: 255 255 255;
+    --error-container: 255 218 214;
+    --on-error-container: 65 0 2;
+    --success: 27 122 61;
+    --success-container: 212 243 219;
+    --on-success-container: 0 33 12;
+    --warning: 140 82 0;
+    --warning-container: 255 221 186;
+    --on-warning-container: 45 22 0;
+    --info-container: 214 235 255;
+    --on-info-container: 0 30 49;
+
+    color-scheme: light;
+  }
+
+  .dark {
+    --primary: 179 197 255;
+    --on-primary: 0 43 117;
+    --primary-container: 18 66 170;
+    --on-primary-container: 219 227 255;
+    --secondary-container: 61 70 92;
+    --on-secondary-container: 220 226 249;
+
+    --surface: 17 19 24;
+    --surface-dim: 12 14 19;
+    --surface-container-lowest: 12 14 19;
+    --surface-container-low: 25 27 32;
+    --surface-container: 29 32 36;
+    --surface-container-high: 39 42 47;
+    --surface-container-highest: 50 53 58;
+    --on-surface: 226 226 233;
+    --on-surface-variant: 196 198 208;
+    --outline: 142 144 153;
+    --outline-variant: 68 71 79;
+    --inverse-surface: 226 226 233;
+    --inverse-on-surface: 47 48 54;
+
+    --error: 255 180 171;
+    --on-error: 105 0 5;
+    --error-container: 147 0 10;
+    --on-error-container: 255 218 214;
+    --success: 133 217 152;
+    --success-container: 0 83 36;
+    --on-success-container: 212 243 219;
+    --warning: 255 185 110;
+    --warning-container: 106 60 0;
+    --on-warning-container: 255 221 186;
+    --info-container: 0 75 115;
+    --on-info-container: 214 235 255;
+
+    color-scheme: dark;
+  }
+
   * { box-sizing: border-box; }
-  body { @apply bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased; }
-  ::-webkit-scrollbar { width: 4px; height: 4px; }
-  ::-webkit-scrollbar-track { @apply bg-transparent; }
-  ::-webkit-scrollbar-thumb { @apply bg-gray-300 dark:bg-gray-700 rounded-full; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-surface text-on-surface antialiased text-sm; }
+  ::selection { @apply bg-primary-container text-on-primary-container; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-outline-variant rounded-full; border: 2px solid transparent; background-clip: content-box; }
+  :focus-visible { @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-surface; }
+  /* Native dropdown lists don't inherit the page palette: without this, dark mode shows
+     light text on the browser's white option list */
+  select { @apply bg-surface-container-high text-on-surface; }
+  select option, select optgroup { background-color: rgb(var(--surface-container-high)); color: rgb(var(--on-surface)); }
 }
 
-@layer utilities {
-  .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@layer components {
+  /* State layer: the translucent overlay Material puts on hovered/pressed controls */
+  .state-layer { @apply relative overflow-hidden; }
+  .state-layer::after {
+    content: ''; @apply absolute inset-0 bg-current opacity-0 transition-opacity pointer-events-none;
+  }
+  .state-layer:hover::after { opacity: 0.08; }
+  .state-layer:active::after { opacity: 0.12; }
 }

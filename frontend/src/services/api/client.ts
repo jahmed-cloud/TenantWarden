@@ -1,93 +1,87 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from 'axios'
-import { msalInstance, tenantWardenApiScopes } from '../auth/msalConfig'
-import { useTenantWardenStore } from '../../store/tenantWardenStore'
+import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios'
+import { useTenantWardenStore } from '@/store/tenantWardenStore'
 
-// ─── Token acquisition ────────────────────────────────────────────────────────
+// nginx serves the API under /api and auth-service under /auth (prefix stripped), so the
+// auth endpoints are /auth/auth/... from the browser's point of view.
+const API_BASE  = '/api'
+const AUTH_BASE = '/auth'
 
-async function getAccessToken(): Promise<string | null> {
-  // 1) Local session token (email/password login)
-  const local = useTenantWardenStore.getState().accessToken
-  if (local) return local
+type RetryConfig = InternalAxiosRequestConfig & { _retried?: boolean }
 
-  // 2) Microsoft SSO token
-  if (!msalInstance) return null
-  const account = msalInstance.getActiveAccount()
-  if (!account) return null
+let refreshing: Promise<string | null> | null = null
 
-  try {
-    const result = await msalInstance.acquireTokenSilent({
-      scopes: tenantWardenApiScopes,
-      account,
+/**
+ * Exchanges the httpOnly refresh cookie for a new access token. Concurrent 401s share one
+ * refresh; the refresh token rotates on every call.
+ */
+export function refreshAccessToken(): Promise<string | null> {
+  refreshing ??= axios
+    .post<{ accessToken: string }>(`${AUTH_BASE}/auth/refresh`, null, { withCredentials: true })
+    .then((r) => {
+      useTenantWardenStore.getState().setAccessToken(r.data.accessToken)
+      return r.data.accessToken
     })
-    return result.accessToken
-  } catch {
-    // Silent failed — trigger redirect
-    await msalInstance.acquireTokenRedirect({ scopes: tenantWardenApiScopes })
-    return null
-  }
+    .catch(() => null)
+    .finally(() => { refreshing = null })
+  return refreshing
 }
 
-// ─── Axios instance ───────────────────────────────────────────────────────────
+function createClient(baseURL: string): AxiosInstance {
+  const client = axios.create({ baseURL, timeout: 30_000, withCredentials: true })
 
-function createApiClient(baseURL: string): AxiosInstance {
-  const client = axios.create({
-    baseURL,
-    timeout: 30_000,
-    headers: { 'Content-Type': 'application/json' },
-  })
-
-  // Attach bearer token on every request
-  client.interceptors.request.use(async (config) => {
-    const token = await getAccessToken()
+  client.interceptors.request.use((config) => {
+    const token = useTenantWardenStore.getState().accessToken
     if (token) config.headers.Authorization = `Bearer ${token}`
     return config
   })
 
-  // Global error handling
   client.interceptors.response.use(
     (res) => res,
-    (error: AxiosError) => {
-      if (error.response?.status === 401) {
-        const store = useTenantWardenStore.getState()
-        if (store.accessToken) {
-          store.logout()               // expired local session → back to login
-        } else if (msalInstance?.getActiveAccount()) {
-          msalInstance.loginRedirect({ scopes: tenantWardenApiScopes })
+    async (error: AxiosError) => {
+      const config = error.config as RetryConfig | undefined
+      const url = config?.url ?? ''
+      const isAuthCall = url.includes('/auth/login') || url.includes('/auth/refresh')
+      if (error.response?.status === 401 && config && !config._retried && !isAuthCall) {
+        config._retried = true
+        const token = await refreshAccessToken()
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`
+          return client(config)
         }
+        useTenantWardenStore.getState().clearSession() // back to the sign-in page
       }
       return Promise.reject(error)
     },
   )
-
   return client
 }
 
-export const apiClient   = createApiClient(import.meta.env.VITE_API_URL  ?? '/api')
-export const authClient  = createApiClient(import.meta.env.VITE_AUTH_URL ?? '/auth')
+export const apiClient  = createClient(API_BASE)
+export const authClient = createClient(AUTH_BASE)
 
-// ─── Typed request helpers ────────────────────────────────────────────────────
+/** The API's own error text ({ error }), a validation summary, or the HTTP status. */
+export function errorMessage(err: unknown, fallback = 'Request failed'): string {
+  const e = err as AxiosError<{ error?: string; title?: string; errors?: Record<string, string[]> }>
+  const data = e?.response?.data
+  if (data?.error) return data.error
+  if (data?.errors) return Object.values(data.errors).flat().join(' ')
+  if (data?.title) return data.title
+  if (e?.response?.status === 403) return 'Your role is not allowed to do this'
+  return e?.response ? `${fallback} (HTTP ${e.response.status})` : e?.message ?? fallback
+}
 
 export async function get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-  const { data } = await apiClient.get<T>(url, config)
-  return data
+  return (await apiClient.get<T>(url, config)).data
 }
-
-export async function post<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
-  const { data } = await apiClient.post<T>(url, body, config)
-  return data
+export async function post<T>(url: string, body?: unknown): Promise<T> {
+  return (await apiClient.post<T>(url, body)).data
 }
-
-export async function put<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
-  const { data } = await apiClient.put<T>(url, body, config)
-  return data
+export async function put<T>(url: string, body?: unknown): Promise<T> {
+  return (await apiClient.put<T>(url, body)).data
 }
-
-export async function patch<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
-  const { data } = await apiClient.patch<T>(url, body, config)
-  return data
+export async function patch<T>(url: string, body?: unknown): Promise<T> {
+  return (await apiClient.patch<T>(url, body)).data
 }
-
-export async function del<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-  const { data } = await apiClient.delete<T>(url, config)
-  return data
+export async function del<T>(url: string): Promise<T> {
+  return (await apiClient.delete<T>(url)).data
 }
