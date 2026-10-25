@@ -71,6 +71,7 @@ seed:
 	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/010_audit_partitions.sql || true
 	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/011_incidents_agents_rules.sql || true
 	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/012_monitoring.sql || true
+	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/013_machine_groups.sql || true
 	@$(COMPOSE) exec -T clickhouse sh -c 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$CLICKHOUSE_DB" --multiquery' < clickhouse/migrations/001_analytics_schema.sql || true
 	@echo "✅ Schema up to date (migrations applied)."
 	@echo "   Demo/sample data is NOT loaded — run 'make demo-data' if you want it."
