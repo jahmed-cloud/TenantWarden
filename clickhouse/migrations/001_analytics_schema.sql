@@ -12,14 +12,16 @@ CREATE TABLE IF NOT EXISTS agent_metrics
     cpu_percent   Float32,
     mem_percent   Float32,
     disk_percent  Float32,
-    bytes_sent    UInt64,
+    bytes_sent    UInt64,                   -- unused since 1.0 (older builds stored cumulative counters)
     bytes_recv    UInt64,
-    extra         String DEFAULT ''         -- JSON blob for platform-specific extras
+    extra         String DEFAULT '',        -- JSON blob for platform-specific extras
+    rx_bps        UInt64 DEFAULT 0,         -- network throughput since the previous sample
+    tx_bps        UInt64 DEFAULT 0
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(collected_at)
 ORDER BY (tenant_id, agent_id, collected_at)
-TTL collected_at + INTERVAL 1 YEAR
+TTL toDateTime(collected_at) + INTERVAL 1 YEAR
 SETTINGS index_granularity = 8192;
 
 -- Materialized view: per-tenant hourly CPU average
@@ -62,7 +64,7 @@ CREATE TABLE IF NOT EXISTS signin_events
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (tenant_id, occurred_at, user_id)
-TTL occurred_at + INTERVAL 90 DAY
+TTL toDateTime(occurred_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
 
 -- ─── Alert history ────────────────────────────────────────────────────────────
@@ -80,7 +82,7 @@ CREATE TABLE IF NOT EXISTS alert_history
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (tenant_id, occurred_at, severity)
-TTL occurred_at + INTERVAL 1 YEAR;
+TTL toDateTime(occurred_at) + INTERVAL 1 YEAR;
 
 -- ─── Secure score history ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS secure_score_history
@@ -97,7 +99,7 @@ CREATE TABLE IF NOT EXISTS secure_score_history
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(recorded_at)
 ORDER BY (tenant_id, recorded_at)
-TTL recorded_at + INTERVAL 2 YEAR;
+TTL toDateTime(recorded_at) + INTERVAL 2 YEAR;
 
 -- ─── Custom event ingestion table ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS custom_events
@@ -113,5 +115,9 @@ CREATE TABLE IF NOT EXISTS custom_events
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (tenant_id, source, occurred_at)
-TTL occurred_at + INTERVAL 90 DAY
+TTL toDateTime(occurred_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
+
+-- Installs created before rx_bps / tx_bps existed
+ALTER TABLE agent_metrics ADD COLUMN IF NOT EXISTS rx_bps UInt64 DEFAULT 0;
+ALTER TABLE agent_metrics ADD COLUMN IF NOT EXISTS tx_bps UInt64 DEFAULT 0;
