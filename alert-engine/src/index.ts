@@ -49,8 +49,10 @@ const server = createServer(async (req, res) => {
       const tenantId = String(body.tenantId ?? '')
       if (!UUID.test(tenantId)) return json(res, 400, { error: 'tenantId is required' })
       const windowMinutes = typeof body.windowMinutes === 'number' && body.windowMinutes > 0 ? Math.min(body.windowMinutes, 525_600) : null
+      // Machine scope from the portal: a list of agent ids (an empty list matches nothing)
+      const agents = Array.isArray(body.agents) ? body.agents.map(String).filter((a: string) => UUID.test(a)).slice(0, 1000) : null
       try {
-        const result = await runQuery(db, tenantId, String(body.query ?? ''), { windowMinutes, limit: Number(body.limit) || 500 })
+        const result = await runQuery(db, tenantId, String(body.query ?? ''), { windowMinutes, limit: Number(body.limit) || 500, agents })
         return json(res, 200, result)
       } catch (err) {
         if (err instanceof QueryError) return json(res, 400, { error: err.message, position: err.position ?? null })

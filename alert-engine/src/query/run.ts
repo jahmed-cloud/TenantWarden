@@ -16,9 +16,9 @@ export interface QueryResult {
  * query can neither change data nor hold the database for long.
  */
 export async function runQuery(db: Pool, tenantId: string, text: string,
-  opts: { windowMinutes?: number | null; limit?: number } = {}): Promise<QueryResult> {
+  opts: { windowMinutes?: number | null; limit?: number; agents?: string[] | null } = {}): Promise<QueryResult> {
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 5000)
-  const q = compile(text, { windowMinutes: opts.windowMinutes, limit })
+  const q = compile(text, { windowMinutes: opts.windowMinutes, limit, agents: opts.agents })
   const started = Date.now()
   const client = await db.connect()
   try {

@@ -324,7 +324,7 @@ const likeEscape = (s: string) => s.replace(/[\\%_]/g, (m) => '\\' + m)
 
 export function datasetNames(): string[] { return DATASETS.map((d) => d.name) }
 
-export function compile(text: string, opts: { windowMinutes?: number | null; limit?: number } = {}): CompiledQuery {
+export function compile(text: string, opts: { windowMinutes?: number | null; limit?: number; agents?: string[] | null } = {}): CompiledQuery {
   if (!text.trim()) throw new QueryError('Write a query: start with a dataset such as AgentEvents or Agents')
   if (text.length > 4000) throw new QueryError('The query is too long (4,000 characters at most)')
   const ast = new Parser(tokenize(text)).parse()
@@ -337,6 +337,8 @@ export function compile(text: string, opts: { windowMinutes?: number | null; lim
   let cols: Column[] = Object.entries(ds.fields).map(([name, f]) => ({ name, type: f.type }))
   let sql = `SELECT ${Object.entries(ds.fields).map(([name, f]) => `${f.sql} AS ${quote(name)}`).join(', ')} FROM ${ds.from} WHERE ${ds.tenant}`
   if (opts.windowMinutes && ds.time) sql += ` AND ${ds.time} >= NOW() - make_interval(mins => ${param(Math.round(opts.windowMinutes))}::int)`
+  // Machine scope: datasets without an agent column (sign-ins, alerts …) are not narrowed
+  if (opts.agents && ds.agent) sql += ` AND ${ds.agent} = ANY(${param(opts.agents)}::uuid[])`
 
   let summarized = false, groupBy: string[] = [], aggregates: string[] = []
   let ordered = false        // the current SELECT ends with ORDER BY, so a LIMIT can be appended

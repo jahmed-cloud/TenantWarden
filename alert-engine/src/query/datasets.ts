@@ -11,6 +11,8 @@ export interface Dataset {
   tenant:      string
   /** Column the time range (rule window / explorer range) applies to */
   time?:       string
+  /** Agent id column (uuid) the portal's machine scope filters on */
+  agent?:      string
   fields:      Record<string, { sql: string; type: FieldType; description?: string }>
 }
 
@@ -19,7 +21,7 @@ const online = `CASE WHEN a.last_heartbeat_at > NOW() - INTERVAL '2 minutes' THE
 export const DATASETS: Dataset[] = [
   {
     name: 'AgentEvents', description: 'Events from agents: Windows Event Log, systemd journal, workload logs (source "SQL Server", "nginx" …) and custom log files (source "log:<name>")',
-    from: 'agent_events e', tenant: 'e.tenant_id = $1', time: 'e.occurred_at',
+    from: 'agent_events e', tenant: 'e.tenant_id = $1', time: 'e.occurred_at', agent: 'e.agent_id',
     fields: {
       occurred_at: { sql: 'e.occurred_at', type: 'time' },
       hostname:    { sql: 'e.hostname', type: 'text' },
@@ -31,7 +33,7 @@ export const DATASETS: Dataset[] = [
   },
   {
     name: 'Agents', description: 'One row per host with its latest readings; inventory.<key> reads the security inventory',
-    from: 'agents a', tenant: 'a.tenant_id = $1',
+    from: 'agents a', tenant: 'a.tenant_id = $1', agent: 'a.agent_id',
     fields: {
       hostname:    { sql: 'a.hostname', type: 'text' },
       status:      { sql: online, type: 'text', description: 'online | offline' },
@@ -40,7 +42,8 @@ export const DATASETS: Dataset[] = [
       os_version:  { sql: 'a.os_version', type: 'text' },
       version:     { sql: 'a.version', type: 'text', description: 'agent version' },
       ip:          { sql: 'host(a.ip_address)', type: 'text' },
-      tags:        { sql: `array_to_string(a.tags, ',')`, type: 'text' },
+      tags:        { sql: `array_to_string(a.tags, ',')`, type: 'text', description: 'from the agent config' },
+      groups:      { sql: `array_to_string(a.groups, ',')`, type: 'text', description: 'machine groups set in the portal' },
       cpu:         { sql: 'a.cpu_percent::float8', type: 'number', description: '%' },
       memory:      { sql: 'a.memory_percent::float8', type: 'number', description: '%' },
       disk:        { sql: 'a.disk_percent::float8', type: 'number', description: 'fullest disk, %' },
@@ -53,7 +56,7 @@ export const DATASETS: Dataset[] = [
   {
     name: 'Workloads', description: 'Server roles the agents discovered (SQL Server, IIS, AD DS, DNS, nginx, MySQL, PostgreSQL …)',
     from: `agents a CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(a.inventory->'workloads') = 'array' THEN a.inventory->'workloads' ELSE '[]'::jsonb END) w`,
-    tenant: 'a.tenant_id = $1',
+    tenant: 'a.tenant_id = $1', agent: 'a.agent_id',
     fields: {
       hostname: { sql: 'a.hostname', type: 'text' },
       type:     { sql: `w->>'type'`, type: 'text', description: 'sqlserver | iis | adds | dns | dhcp | hyperv | fileserver | nginx | apache | mysql | postgresql | redis | mongodb | docker …' },
@@ -65,7 +68,7 @@ export const DATASETS: Dataset[] = [
   },
   {
     name: 'Checks', description: 'Latest result of every endpoint check (TCP, HTTP, DNS) per agent',
-    from: 'endpoint_checks c', tenant: 'c.tenant_id = $1',
+    from: 'endpoint_checks c', tenant: 'c.tenant_id = $1', agent: 'c.agent_id',
     fields: {
       hostname:       { sql: 'c.hostname', type: 'text', description: 'agent running the check' },
       name:           { sql: 'c.name', type: 'text' },
@@ -82,7 +85,7 @@ export const DATASETS: Dataset[] = [
   },
   {
     name: 'CheckHistory', description: 'Every endpoint check result (kept 14 days)',
-    from: 'endpoint_check_results r', tenant: 'r.tenant_id = $1', time: 'r.checked_at',
+    from: 'endpoint_check_results r', tenant: 'r.tenant_id = $1', time: 'r.checked_at', agent: 'r.agent_id',
     fields: {
       checked_at: { sql: 'r.checked_at', type: 'time' },
       name:       { sql: 'r.name', type: 'text' },
