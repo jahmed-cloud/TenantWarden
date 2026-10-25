@@ -4,6 +4,7 @@
 .PHONY: all up down build build-agent test lint setup-env certs seed health clean help logs ps
 
 COMPOSE := docker compose
+VERSION ?= 1.0.0
 
 all: help
 
@@ -68,6 +69,9 @@ seed:
 	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/008_more_controls.sql || true
 	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/009_auth_methods.sql || true
 	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/010_audit_partitions.sql || true
+	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/011_incidents_agents_rules.sql || true
+	@$(COMPOSE) exec -T postgres psql -U tenantwarden -d tenantwarden < postgres/migrations/012_monitoring.sql || true
+	@$(COMPOSE) exec -T clickhouse sh -c 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$CLICKHOUSE_DB" --multiquery' < clickhouse/migrations/001_analytics_schema.sql || true
 	@echo "✅ Schema up to date (migrations applied)."
 	@echo "   Demo/sample data is NOT loaded — run 'make demo-data' if you want it."
 
@@ -91,8 +95,13 @@ dev-api:
 dev-frontend:
 	cd frontend && npm run dev
 
+# Uses a local Go toolchain when there is one, otherwise the golang:1.22 image
 build-agent:
-	cd agent && $(MAKE) all && echo "✅ Binaries in agent/dist/"
+	@if command -v go >/dev/null 2>&1; then cd agent && $(MAKE) all VERSION=$(VERSION); \
+	else docker run --rm -v "$(CURDIR)/agent:/src" -w /src -e GOFLAGS=-buildvcs=false golang:1.22 make all VERSION=$(VERSION); fi
+	@# The dev CA lets agents trust a self-signed gateway: --ca-file ca.crt
+	@if [ -f gateway/certs/ca.crt ]; then cp gateway/certs/ca.crt agent/dist/ca.crt; fi
+	@echo "✅ Binaries in agent/dist/ (served at /downloads/)"
 
 test:
 	cd frontend && npm test -- --run || true
