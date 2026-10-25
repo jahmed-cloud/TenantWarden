@@ -20,15 +20,36 @@ export default {
   darkMode: 'class',
   theme: {
     extend: {
-      colors: Object.fromEntries(roles.map((r) => [r, role(r)])),
-      fontFamily: {
-        sans: ['Roboto', '"Segoe UI"', 'system-ui', '-apple-system', 'sans-serif'],
-        mono: ['"Roboto Mono"', '"Cascadia Code"', 'Consolas', 'monospace'],
+      colors: {
+        ...Object.fromEntries(roles.map((r) => [r, role(r)])),
+        // Fixed brand colours from tenantwarden.org, for surfaces that look the same in both themes
+        brand: { navy: '#0b1220', panel: '#111c2d', panel2: '#152338', line: '#26374c', mint: '#7ce6c5', mint2: '#48cba9', ink: '#edf6f5', muted: '#92a2b5' },
       },
+      // Same typefaces as the website, bundled through @fontsource (no calls to Google at runtime)
+      fontFamily: {
+        sans: ['"DM Sans Variable"', '"Segoe UI"', 'system-ui', '-apple-system', 'sans-serif'],
+        display: ['"Space Grotesk Variable"', '"DM Sans Variable"', 'system-ui', 'sans-serif'],
+        mono: ['"DM Mono"', '"Cascadia Code"', 'Consolas', 'monospace'],
+      },
+      // Theme-aware: soft shadows in light mode, the website's hairline borders in dark mode (index.css)
       boxShadow: {
-        e1: '0 1px 2px rgb(16 24 40 / 0.06), 0 1px 3px 1px rgb(16 24 40 / 0.06)',
-        e2: '0 1px 2px rgb(16 24 40 / 0.08), 0 2px 6px 2px rgb(16 24 40 / 0.08)',
-        e3: '0 4px 8px 3px rgb(16 24 40 / 0.10), 0 1px 3px rgb(16 24 40 / 0.14)',
+        e1: 'var(--shadow-e1)',
+        e2: 'var(--shadow-e2)',
+        e3: 'var(--shadow-e3)',
+      },
+      keyframes: {
+        'fade-up':   { from: { opacity: '0', transform: 'translateY(8px)' }, to: { opacity: '1', transform: 'none' } },
+        'fade-in':   { from: { opacity: '0' }, to: { opacity: '1' } },
+        'scale-in':  { from: { opacity: '0', transform: 'scale(.96)' }, to: { opacity: '1', transform: 'none' } },
+        'slide-in':  { from: { transform: 'translateX(32px)', opacity: '0' }, to: { transform: 'none', opacity: '1' } },
+        float:       { '50%': { transform: 'translateY(-10px)' } },
+      },
+      animation: {
+        'fade-up':  'fade-up .35s cubic-bezier(.2, 0, 0, 1) both',
+        'fade-in':  'fade-in .2s ease-out both',
+        'scale-in': 'scale-in .22s cubic-bezier(.2, 0, 0, 1) both',
+        'slide-in': 'slide-in .3s cubic-bezier(.2, 0, 0, 1) both',
+        float:      'float 6s ease-in-out infinite',
       },
       borderRadius: {
         xl: '12px',

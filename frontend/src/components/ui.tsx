@@ -1,6 +1,7 @@
 // Material 3-style building blocks. Colours come from the theme roles in index.css, so
 // nothing here needs separate dark-mode classes.
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { clsx as cx } from 'clsx'
 import { Check, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, X, type LucideIcon } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -13,7 +14,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
       <div className="min-w-0">
-        <h1 className="text-[22px] leading-7 font-normal text-on-surface">{title}</h1>
+        <h1 className="font-display text-2xl leading-8 font-medium tracking-tight text-on-surface">{title}</h1>
         {subtitle && <p className="text-sm text-on-surface-variant mt-1">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -284,20 +285,22 @@ export function Dialog({ open, onClose, title, children, actions, wide }: {
 }) {
   useEscape(open, onClose)
   if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onMouseDown={onClose}>
+  // Portalled to <body>: inside the top bar (backdrop-blur) a fixed overlay would be clipped to the bar
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-fade-in" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-label={title}
         onMouseDown={(e) => e.stopPropagation()}
-        className={cx('bg-surface-container-high text-on-surface rounded-3xl shadow-e3 w-full max-h-[90vh] flex flex-col',
+        className={cx('bg-surface-container-high text-on-surface rounded-3xl shadow-e3 w-full max-h-[90vh] flex flex-col animate-scale-in',
           wide ? 'max-w-2xl' : 'max-w-md')}
       >
-        <h2 className="text-2xl font-normal px-6 pt-6 pb-4">{title}</h2>
+        <h2 className="font-display text-2xl font-medium tracking-tight px-6 pt-6 pb-4">{title}</h2>
         <div className="px-6 overflow-y-auto flex-1 text-sm text-on-surface-variant">{children}</div>
         {actions && <div className="flex justify-end gap-2 px-6 py-5">{actions}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -322,11 +325,11 @@ export function Sheet({ open, onClose, title, subtitle, children, actions }: {
 }) {
   useEscape(open, onClose)
   if (!open) return null
-  return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onMouseDown={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/30 animate-fade-in" onMouseDown={onClose}>
       <aside
         onMouseDown={(e) => e.stopPropagation()}
-        className="bg-surface-container-low w-full max-w-2xl h-full shadow-e3 flex flex-col rounded-l-3xl"
+        className="bg-surface-container-low w-full max-w-2xl h-full shadow-e3 flex flex-col rounded-l-3xl animate-slide-in"
       >
         <header className="flex items-start gap-3 px-6 pt-5 pb-4">
           <div className="flex-1 min-w-0">
@@ -338,7 +341,8 @@ export function Sheet({ open, onClose, title, subtitle, children, actions }: {
         <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">{children}</div>
         {actions && <footer className="flex flex-wrap justify-end gap-2 px-6 py-4 border-t border-outline-variant">{actions}</footer>}
       </aside>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -354,11 +358,11 @@ export function Menu({ trigger, children, align = 'right' }: { trigger: (open: (
   }, [open])
   useEscape(open, () => setOpen(false))
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative min-w-0" ref={ref}>
       {trigger(() => setOpen((v) => !v))}
       {open && (
-        <div className={cx('absolute z-50 mt-1 min-w-[220px] py-2 rounded-xl bg-surface-container shadow-e2',
-          align === 'right' ? 'right-0' : 'left-0')}>
+        <div className={cx('absolute z-50 mt-1 min-w-[220px] py-2 rounded-xl bg-surface-container shadow-e2 animate-scale-in',
+          align === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left')}>
           {children(() => setOpen(false))}
         </div>
       )}
@@ -442,7 +446,7 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
 
 export interface Column<T> {
   key: string
-  header: string
+  header: ReactNode
   render?: (row: T) => ReactNode
   className?: string
   align?: 'left' | 'right' | 'center'

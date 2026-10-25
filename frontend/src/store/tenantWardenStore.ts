@@ -23,6 +23,12 @@ export interface ActiveTenant {
 
 type Theme = 'light' | 'dark' | 'system'
 
+/** Which machines the agent-based pages show. Kept per tenant: switching tenants shows all again. */
+export type MachineScope =
+  | { kind: 'all' }
+  | { kind: 'group'; tenantId: string; group: string }
+  | { kind: 'machines'; tenantId: string; ids: string[] }
+
 interface TenantWardenState {
   // Session. The access token stays in memory only; a reload gets a new one from the
   // httpOnly refresh cookie (see services/api/client.ts).
@@ -35,6 +41,9 @@ interface TenantWardenState {
 
   activeTenant: ActiveTenant | null
   setActiveTenant: (tenant: ActiveTenant | null) => void
+
+  machineScope: MachineScope
+  setMachineScope: (scope: MachineScope) => void
 
   theme: Theme
   setTheme: (theme: Theme) => void
@@ -55,6 +64,9 @@ export const useTenantWardenStore = create<TenantWardenState>()(
       activeTenant: null,
       setActiveTenant: (activeTenant) => set({ activeTenant }),
 
+      machineScope: { kind: 'all' },
+      setMachineScope: (machineScope) => set({ machineScope }),
+
       theme: 'light',
       setTheme: (theme) => set({ theme }),
       navCollapsed: false,
@@ -64,10 +76,10 @@ export const useTenantWardenStore = create<TenantWardenState>()(
       name: 'tenantwarden-store',
       version: 2,
       // Preferences only — never the token
-      partialize: (s) => ({ theme: s.theme, navCollapsed: s.navCollapsed, activeTenant: s.activeTenant }),
+      partialize: (s) => ({ theme: s.theme, navCollapsed: s.navCollapsed, activeTenant: s.activeTenant, machineScope: s.machineScope }),
       migrate: (persisted) => {
         const p = (persisted ?? {}) as Partial<TenantWardenState>
-        return { theme: p.theme ?? 'light', navCollapsed: false, activeTenant: p.activeTenant ?? null } as TenantWardenState
+        return { theme: p.theme ?? 'light', navCollapsed: false, activeTenant: p.activeTenant ?? null, machineScope: { kind: 'all' } } as TenantWardenState
       },
     },
   ),

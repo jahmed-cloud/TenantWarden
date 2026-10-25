@@ -1,47 +1,84 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, CircleSlash, Cpu, HardDrive, KeyRound, Monitor, Plus, Server, Trash2, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, CircleSlash, Cpu, Filter, FolderMinus, FolderPlus, HardDrive, KeyRound, Monitor, Plus, Server, Trash2, X, XCircle } from 'lucide-react'
 import {
-  useAgentEvents, useAgentInventory, useAgentMetrics, useAgents, useAgentStats, useCreateEnrollmentToken, useDeleteAgent,
+  useAgentEvents, useAgentGroups, useAgentInventory, useAgentMetrics, useAgents, useAgentStats, useChangeGroups, useCreateEnrollmentToken, useDeleteAgent,
   useEnrollmentTokens, useRevokeEnrollmentToken, useTenantId, type Agent, type AgentEvent, type AgentInventory, type EnrollmentToken,
 } from '@/services/api/hooks'
-import { useCan } from '@/store/tenantWardenStore'
+import { useCan, useTenantWardenStore } from '@/store/tenantWardenStore'
 import { TimeSeriesChart } from '@/components/charts'
 import { ProfileEditor } from '@/components/ProfileEditor'
+import { ScopeBanner } from '@/components/MachineScope'
 import {
-  Banner, Button, Card, CodeBlock, ConfirmDialog, DataTable, Dialog, EmptyState, IconButton, KeyValues, Meter, PageHeader,
-  Pill, SearchField, Segmented, SelectField, Sheet, StatCard, StatusPill, Tabs, cx, type Column,
+  Banner, Button, Card, Chip, CodeBlock, ConfirmDialog, DataTable, Dialog, EmptyState, IconButton, KeyValues, Meter, PageHeader,
+  Pill, SearchField, Segmented, SelectField, Sheet, StatCard, StatusPill, Tabs, TextField, cx, type Column,
 } from '@/components/ui'
 import { fmtDate, fmtDateTime, fmtDuration, fmtNumber, timeAgo } from '@/lib/format'
 
 type Platform = 'windows' | 'linux' | 'macos'
 
 const LEVEL_TONE: Record<string, 'error' | 'warning' | 'info' | 'neutral'> = { critical: 'error', error: 'error', warning: 'warning', info: 'info' }
+const PLATFORM_LABEL: Record<string, string> = { windows: 'Windows', linux: 'Linux', macos: 'macOS', docker: 'Docker' }
+// Same rule as the API (AgentsController.ChangeGroups)
+const GROUP_NAME = /^[A-Za-z0-9 ._-]{1,40}$/
+const CHECKBOX = 'w-4 h-4 cursor-pointer accent-[rgb(var(--primary))]'
+
+const groupsOf = (a: Agent) => (a.groups ? a.groups.split(',') : [])
 
 export function AgentsPage() {
+  const tenantId = useTenantId()
   const { data: agents, isLoading } = useAgents()
   const { data: stats } = useAgentStats()
   const { data: events } = useAgentEvents(undefined, 30)
   const canManage = useCan('manageAgents')
+  const setScope = useTenantWardenStore((s) => s.setMachineScope)
   const [adding, setAdding] = useState(false)
   const [selected, setSelected] = useState<Agent | null>(null)
   const [search, setSearch] = useState('')
+  const [status, setStatus] = useState<'all' | 'online' | 'offline'>('all')
+  const [platform, setPlatform] = useState<string | null>(null)
+  const [group, setGroup] = useState<string | null>(null)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [grouping, setGrouping] = useState<'add' | 'remove' | null>(null)
   const [params, setParams] = useSearchParams()
   const view = params.get('tab') === 'profile' ? 'profile' : 'fleet'
 
-  const rows = useMemo(() => (agents ?? []).filter((a) =>
-    !search || [a.hostname, a.ipAddress, a.osName].some((v) => v?.toLowerCase().includes(search.toLowerCase()))), [agents, search])
+  const all = useMemo(() => agents ?? [], [agents])
+  const platforms = useMemo(() => [...new Set(all.map((a) => a.platform))].sort(), [all])
+  const groups = useMemo(() => [...new Set(all.flatMap(groupsOf))].sort((a, b) => a.localeCompare(b)), [all])
+  const rows = useMemo(() => all.filter((a) =>
+    (status === 'all' || (a.status === 'online') === (status === 'online')) &&
+    (!platform || a.platform === platform) &&
+    (!group || groupsOf(a).includes(group)) &&
+    (!search || [a.hostname, a.ipAddress, a.osName, a.groups, a.tags].some((v) => v?.toLowerCase().includes(search.toLowerCase())))),
+  [all, status, platform, group, search])
+  // Picks outside the current list (another scope, a removed agent) are ignored
+  const pickedAgents = all.filter((a) => picked.has(a.agentId))
+  const pickedGroups = [...new Set(pickedAgents.flatMap(groupsOf))].sort((a, b) => a.localeCompare(b))
+  const allShownPicked = rows.length > 0 && rows.every((a) => picked.has(a.agentId))
+  const pick = (list: Agent[], on: boolean) => setPicked((p) => {
+    const next = new Set(p)
+    for (const a of list) { if (on) next.add(a.agentId); else next.delete(a.agentId) }
+    return next
+  })
+  const filtered = status !== 'all' || !!platform || !!group
 
   const columns: Column<Agent>[] = [
+    { key: 'pick', header: <input type="checkbox" aria-label="Select all shown" className={CHECKBOX} checked={allShownPicked} onChange={(e) => pick(rows, e.target.checked)} />,
+      render: (a) => <input type="checkbox" aria-label={`Select ${a.hostname}`} className={CHECKBOX} checked={picked.has(a.agentId)}
+        onClick={(e) => e.stopPropagation()} onChange={(e) => pick([a], e.target.checked)} /> },
     { key: 'host', header: 'Host', render: (a) => (
       <div className="flex items-center gap-3 min-w-0">
-        <span className={cx('w-2.5 h-2.5 rounded-full shrink-0', a.status === 'online' ? 'bg-success' : 'bg-outline')} title={a.status} />
+        <span className={cx('w-2.5 h-2.5 rounded-full shrink-0', a.status === 'online' ? 'bg-success tw-live' : 'bg-outline')} title={a.status} />
         <div className="min-w-0">
           <div className="font-medium truncate">{a.hostname}</div>
           <div className="text-xs text-on-surface-variant truncate">{a.osName ?? a.platform} {a.osVersion?.split(' ')[0]}</div>
         </div>
       </div>
     ) },
+    { key: 'groups', header: 'Groups', render: (a) => groupsOf(a).length
+      ? <span className="flex flex-wrap gap-1 max-w-[220px]">{groupsOf(a).map((g) => <Pill key={g} tone="primary">{g}</Pill>)}</span>
+      : <span className="text-xs text-on-surface-variant">—</span> },
     { key: 'cpu', header: 'CPU', render: (a) => <Meter value={a.status === 'online' ? a.cpuPercent : null} /> },
     { key: 'mem', header: 'Memory', render: (a) => <Meter value={a.status === 'online' ? a.memoryPercent : null} /> },
     { key: 'disk', header: 'Fullest disk', render: (a) => <Meter value={a.diskPercent} warnAt={80} badAt={92} /> },
@@ -59,6 +96,7 @@ export function AgentsPage() {
         tabs={[{ id: 'fleet', label: 'Fleet', count: stats?.total }, { id: 'profile', label: 'Monitoring profile' }]} />
 
       {view === 'profile' ? <ProfileEditor /> : <>
+      <ScopeBanner />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <StatCard label="Agents" icon={Server} value={fmtNumber(stats?.total)} loading={!stats}
           detail={stats && <>{stats.windows} Windows · {stats.linux} Linux · {stats.macOs} macOS{stats.docker ? ` · ${stats.docker} Docker` : ''}</>} />
@@ -68,10 +106,47 @@ export function AgentsPage() {
           value={fmtNumber(events?.length)} detail={events && `${events.filter((e) => e.level === 'critical').length} critical`} />
       </div>
 
-      <Card flush className="mb-4" title="Fleet" action={<SearchField value={search} onChange={setSearch} placeholder="Search hosts" />}>
-        <DataTable columns={columns} rows={rows} loading={isLoading} rowKey={(a) => a.id} onRowClick={setSelected}
-          empty={<EmptyState icon={Cpu} title="No agents yet" body="Install the agent on a server or workstation to stream metrics, security events and an inventory here."
-            action={canManage && <Button icon={Plus} onClick={() => setAdding(true)}>Add your first agent</Button>} />} />
+      <Card flush className="mb-4" title="Fleet" subtitle={all.length ? `${rows.length} of ${all.length} shown` : undefined}
+        action={<SearchField value={search} onChange={setSearch} placeholder="Search hosts, groups, tags" />}>
+        {all.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+            {(['all', 'online', 'offline'] as const).map((s) => (
+              <Chip key={s} selected={status === s} onClick={() => setStatus(s)}
+                count={s === 'all' ? all.length : all.filter((a) => (a.status === 'online') === (s === 'online')).length}>
+                {s === 'all' ? 'Any status' : s === 'online' ? 'Online' : 'Offline'}
+              </Chip>
+            ))}
+            {platforms.length > 1 && <span className="w-px h-5 bg-outline-variant mx-1" />}
+            {platforms.length > 1 && platforms.map((p) => (
+              <Chip key={p} selected={platform === p} onClick={() => setPlatform(platform === p ? null : p)}
+                count={all.filter((a) => a.platform === p).length}>{PLATFORM_LABEL[p] ?? p}</Chip>
+            ))}
+            {groups.length > 0 && <span className="w-px h-5 bg-outline-variant mx-1" />}
+            {groups.map((g) => (
+              <Chip key={g} selected={group === g} onClick={() => setGroup(group === g ? null : g)}
+                count={all.filter((a) => groupsOf(a).includes(g)).length}>{g}</Chip>
+            ))}
+            {filtered && <Button size="sm" variant="text" onClick={() => { setStatus('all'); setPlatform(null); setGroup(null) }}>Clear filters</Button>}
+          </div>
+        )}
+        {pickedAgents.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 mx-4 mb-3 pl-4 pr-2 py-2 rounded-2xl bg-secondary-container text-on-secondary-container">
+            <span className="text-sm font-medium mr-2">{pickedAgents.length} selected</span>
+            {canManage && <Button size="sm" variant="filled" icon={FolderPlus} onClick={() => setGrouping('add')}>Add to group</Button>}
+            {canManage && pickedGroups.length > 0 && <Button size="sm" variant="outlined" icon={FolderMinus} onClick={() => setGrouping('remove')}>Remove from group</Button>}
+            <Button size="sm" variant="text" icon={Filter}
+              onClick={() => { setScope({ kind: 'machines', tenantId, ids: pickedAgents.map((a) => a.agentId) }); setPicked(new Set()) }}>
+              Show only these
+            </Button>
+            <div className="flex-1" />
+            <IconButton icon={X} label="Clear selection" onClick={() => setPicked(new Set())} />
+          </div>
+        )}
+        <DataTable columns={columns} rows={all.length ? rows : agents} loading={isLoading} rowKey={(a) => a.id} onRowClick={setSelected}
+          empty={all.length
+            ? <EmptyState icon={Filter} title="No hosts match" body="Change the search or the filters above." />
+            : <EmptyState icon={Cpu} title="No agents yet" body="Install the agent on a server or workstation to stream metrics, security events and an inventory here."
+                action={canManage && <Button icon={Plus} onClick={() => setAdding(true)}>Add your first agent</Button>} />} />
       </Card>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -83,8 +158,55 @@ export function AgentsPage() {
       </>}
 
       {adding && <AddAgentDialog onClose={() => setAdding(false)} />}
+      {grouping && <GroupDialog mode={grouping} agents={pickedAgents} onClose={() => setGrouping(null)}
+        onDone={() => { setGrouping(null); setPicked(new Set()) }} />}
       {selected && <AgentSheet agent={agents?.find((a) => a.id === selected.id) ?? selected} onClose={() => setSelected(null)} />}
     </div>
+  )
+}
+
+/** Adds the picked machines to a group (new or existing), or takes them out of one. */
+function GroupDialog({ mode, agents, onClose, onDone }: { mode: 'add' | 'remove'; agents: Agent[]; onClose: () => void; onDone: () => void }) {
+  const tenantId = useTenantId()
+  const change = useChangeGroups()
+  const { data: existing } = useAgentGroups()
+  const onPicked = [...new Set(agents.flatMap(groupsOf))].sort((a, b) => a.localeCompare(b))
+  const choices = mode === 'add' ? (existing ?? []).map((g) => g.name) : onPicked
+  const [name, setName] = useState(mode === 'remove' && onPicked.length === 1 ? onPicked[0] : '')
+  const trimmed = name.trim()
+  const valid = GROUP_NAME.test(trimmed)
+  const machines = `${agents.length} machine${agents.length === 1 ? '' : 's'}`
+  const submit = () => {
+    if (!valid || change.isPending) return
+    const agentIds = agents.map((a) => a.agentId)
+    change.mutate(mode === 'add' ? { tenantId, agentIds, add: trimmed } : { tenantId, agentIds, remove: trimmed }, { onSuccess: onDone })
+  }
+
+  return (
+    <Dialog open onClose={onClose} title={mode === 'add' ? `Add ${machines} to a group` : `Remove ${machines} from a group`}
+      actions={<>
+        <Button variant="text" onClick={onClose}>Cancel</Button>
+        <Button disabled={!valid} loading={change.isPending} onClick={submit}>{mode === 'add' ? 'Add to group' : 'Remove from group'}</Button>
+      </>}>
+      <div className="space-y-4 pb-2">
+        {mode === 'add' && (
+          <TextField label="Group name" value={name} onChange={setName} autoFocus onEnter={submit} placeholder="e.g. SQL servers, Production, London"
+            hint={trimmed && !valid ? 'Use letters, digits, spaces, dot, dash or underscore (40 characters at most)' : 'A new name creates the group.'} />
+        )}
+        {choices.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-on-surface-variant mb-2">{mode === 'add' ? 'Existing groups' : 'Groups on the selected machines'}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {choices.map((g) => <Chip key={g} selected={trimmed === g} onClick={() => setName(g)}>{g}</Chip>)}
+            </div>
+          </div>
+        )}
+        <p className="text-xs">
+          Groups belong to the portal, unlike the tags set in the agent's config. Use them to filter every agent page from the
+          machine picker in the top bar.
+        </p>
+      </div>
+    </Dialog>
   )
 }
 
@@ -264,6 +386,8 @@ function AgentSheet({ agent, onClose }: { agent: Agent; onClose: () => void }) {
               ['Uptime', fmtDuration(agent.uptimeSeconds)],
               ['Agent version', `v${agent.version}`],
               ['Agent ID', <span className="font-mono text-xs">{agent.agentId}</span>],
+              ['Groups', groupsOf(agent).length ? groupsOf(agent).join(', ') : 'none (Fleet → select → Add to group)'],
+              ['Tags', agent.tags ? agent.tags.split(',').join(', ') : 'none (agent.tags in agent.yaml)'],
               ['First seen', fmtDateTime(agent.createdAt)],
               ['Last report', fmtDateTime(agent.lastHeartbeatAt)],
               ['Inventory', inventory?.collected_at ? fmtDateTime(String(inventory.collected_at)) : 'not received yet'],

@@ -5,6 +5,7 @@ import { useCheckHistory, useChecks, useNetworkSummary, type EndpointCheck, type
 import { TimeSeriesChart } from '@/components/charts'
 import { Button, Card, Chip, DataTable, EmptyState, PageHeader, Pill, Segmented, StatCard, StatusPill, cx, type Column } from '@/components/ui'
 import { fmtNumber, timeAgo } from '@/lib/format'
+import { ScopeBanner } from '@/components/MachineScope'
 
 const PORT_NAMES: Record<string, string> = {
   '3389': 'RDP', '445': 'SMB', '23': 'Telnet', '21': 'FTP', '1433': 'SQL Server', '3306': 'MySQL',
@@ -83,6 +84,7 @@ export function NetworkPage() {
     <div>
       <PageHeader title="Network" subtitle="Throughput and connections from every agent, risky open ports, and endpoint checks run from inside your network"
         actions={<Segmented value={hours} onChange={setHours} options={[{ value: 1, label: '1 h' }, { value: 6, label: '6 h' }, { value: 24, label: '24 h' }, { value: 168, label: '7 d' }]} />} />
+      <ScopeBanner />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <StatCard label="Fleet throughput now" icon={ArrowDownUp} loading={isLoading} value={`${mbps(rx + tx)} Mbit/s`} detail={`${mbps(rx)} in · ${mbps(tx)} out · ${online.length} hosts`} />

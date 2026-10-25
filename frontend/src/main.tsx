@@ -4,6 +4,10 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import App from './App'
+import '@fontsource-variable/dm-sans'
+import '@fontsource-variable/space-grotesk'
+import '@fontsource/dm-mono/400.css'
+import '@fontsource/dm-mono/500.css'
 import './index.css'
 
 const queryClient = new QueryClient({

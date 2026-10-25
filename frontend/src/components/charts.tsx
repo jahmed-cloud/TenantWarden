@@ -17,13 +17,16 @@ echarts.use([EBar, EGauge, ELine, EPie, GridComponent, LegendComponent, TooltipC
 function useChartTheme() {
   const dark = useIsDark()
   return useMemo(() => dark
-    ? { text: '#c4c6d0', subtle: '#8e9099', grid: '#2e3137', tipBg: '#282a2f', tipBorder: '#44474f', tipText: '#e2e2e9', track: '#32353a',
-        series: ['#8fb0ff', '#4db6ac', '#b39ddb', '#ffcc80', '#ef9a9a', '#90a4ae'] }
-    : { text: '#454851', subtle: '#757882', grid: '#e6e8ee', tipBg: '#ffffff', tipBorder: '#d5d8e0', tipText: '#1a1c22', track: '#e7e9f0',
-        series: ['#1f5bd8', '#00897b', '#7e57c2', '#f9a825', '#c62828', '#78909c'] },
+    // Brand series: mint first, then the website's blue, amber and rose accents
+    ? { text: '#92a2b5', subtle: '#6e7f93', grid: '#1f2f45', tipBg: '#152338', tipBorder: '#26374c', tipText: '#edf6f5', track: '#1c2c42',
+        series: ['#7ce6c5', '#6aa8ff', '#b39ddb', '#f7d084', '#ff93a7', '#92a2b5'] }
+    : { text: '#424e5c', subtle: '#707d8c', grid: '#e3e9ee', tipBg: '#ffffff', tipBorder: '#d0d9e1', tipText: '#0b1220', track: '#e1e7ec',
+        series: ['#0f9d7a', '#0873c4', '#7e57c2', '#d99a1e', '#d6455d', '#64748b'] },
   [dark])
 }
 type ChartTheme = ReturnType<typeof useChartTheme>
+
+const CHART_FONT = '"DM Sans Variable", "Segoe UI", system-ui, sans-serif'
 
 export function EChart({ option, height = 260 }: { option: EChartsCoreOption; height?: number }) {
   const el = useRef<HTMLDivElement>(null)
@@ -35,7 +38,15 @@ export function EChart({ option, height = 260 }: { option: EChartsCoreOption; he
     ro.observe(el.current!)
     return () => { ro.disconnect(); c.dispose(); chart.current = null }
   }, [])
-  useEffect(() => { chart.current?.setOption(option, true) }, [option])
+  useEffect(() => {
+    const c = chart.current
+    if (!c) return
+    const apply = () => { if (!c.isDisposed()) c.setOption({ textStyle: { fontFamily: CHART_FONT }, ...option }, true) }
+    apply()
+    // Labels are measured with whatever font is loaded at the time: lay out again once the web font is in,
+    // or long axis labels end up clipped
+    if (document.fonts && document.fonts.status !== 'loaded') void document.fonts.ready.then(apply)
+  }, [option])
   return <div ref={el} style={{ height }} className="w-full" />
 }
 
@@ -224,23 +235,40 @@ export function DonutChart({ data, height = 220, centerValue, centerLabel, empty
 
 export interface BarDatum { label: string; value: number; secondary?: number; color?: string }
 
+const LABEL_MAX = 190
+let measureCtx: CanvasRenderingContext2D | null = null
+/** Width of the longest axis label in the chart font, capped at LABEL_MAX (longer ones get an ellipsis). */
+function labelWidth(labels: string[], fontSize: number): number {
+  measureCtx ??= document.createElement('canvas').getContext('2d')
+  if (!measureCtx) return LABEL_MAX
+  measureCtx.font = `${fontSize}px ${CHART_FONT}`
+  return Math.min(LABEL_MAX, Math.ceil(Math.max(0, ...labels.map((l) => measureCtx!.measureText(l).width))))
+}
+
 export function HBarChart({ data, height, name = 'Count', secondaryName, empty }: {
   data: BarDatum[]; height?: number; name?: string; secondaryName?: string; empty?: ReactNode
 }) {
   const T = useChartTheme()
   const rows = [...data].sort((a, b) => a.value - b.value)
   const h = height ?? Math.max(140, rows.length * 30 + 40)
-  const option = useMemo(() => ({
-    tooltip: tooltip(T), grid: { top: 4, right: 40, bottom: secondaryName ? 36 : 4, left: 8, containLabel: true },
+  // The label column is sized here rather than with containLabel, which under-measures truncated labels
+  // and clips the start of long names (event sources, hosts)
+  const option = useMemo(() => {
+    const labelW = labelWidth(rows.map((r) => r.label), 12)
+    return {
+    tooltip: tooltip(T), grid: { top: 4, right: 40, bottom: secondaryName ? 52 : 24, left: labelW + 16 },
     legend: secondaryName ? legend(T) : undefined,
     xAxis: valueAxis(T, { splitLine: { lineStyle: { color: T.grid } } }),
-    yAxis: { type: 'category', data: rows.map((r) => r.label), axisTick: { show: false }, axisLine: { show: false }, axisLabel: { color: T.text, fontSize: 12 } },
+    yAxis: { type: 'category', data: rows.map((r) => r.label), axisTick: { show: false }, axisLine: { show: false },
+      axisLabel: { color: T.text, fontSize: 12, width: labelW, overflow: 'truncate' } },
     series: [
-      { name, type: 'bar', barMaxWidth: 16, data: rows.map((r, i) => ({ value: r.value, itemStyle: { color: r.color ?? T.series[0], borderRadius: [0, 4, 4, 0] }, id: i })),
+      // Series colour too, so the legend swatch matches the bars
+      { name, type: 'bar', barMaxWidth: 16, itemStyle: { color: T.series[0] }, data: rows.map((r, i) => ({ value: r.value, itemStyle: { color: r.color ?? T.series[0], borderRadius: [0, 4, 4, 0] }, id: i })),
         label: { show: !secondaryName, position: 'right', color: T.subtle, fontSize: 11 } },
       ...(secondaryName ? [{ name: secondaryName, type: 'bar', barMaxWidth: 16, data: rows.map((r) => r.secondary ?? 0), itemStyle: { color: SEVERITY_COLOR.high, borderRadius: [0, 4, 4, 0] } }] : []),
     ],
-  }), [rows, T, name, secondaryName])
+    }
+  }, [rows, T, name, secondaryName])
   if (rows.length === 0) return <EmptyChart height={height ?? 180} message={empty} />
   return <EChart option={option} height={h} />
 }

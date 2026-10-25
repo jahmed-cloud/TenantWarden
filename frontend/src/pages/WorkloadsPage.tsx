@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useAgentEvents, useQueryData, useWorkloads, type WorkloadRow } from '@/services/api/hooks'
 import { ResultChart } from '@/components/query'
+import { ScopeBanner } from '@/components/MachineScope'
 import { Button, Card, DataTable, EmptyState, PageHeader, Pill, Segmented, StatCard, StatusPill, cx, type Column } from '@/components/ui'
 import { fmtNumber, timeAgo } from '@/lib/format'
 
@@ -88,6 +89,7 @@ export function WorkloadsPage() {
   return (
     <div>
       <PageHeader title="Workloads" subtitle="Server roles the agents found on your hosts — SQL Server, IIS, Active Directory, DNS, web servers, databases and containers — with their own logs and events" />
+      <ScopeBanner />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <StatCard label="Roles discovered" icon={Server} loading={isLoading} value={fmtNumber(rows?.length)} detail={`${byType.length} kinds`} />
@@ -140,11 +142,11 @@ export function WorkloadsPage() {
 function RoleLogs({ source, label, type, range, setRange }: { source: string; label: string; type: string; range: number; setRange: (v: number) => void }) {
   const q = (s: string) => s.replace(/"/g, '\\"')
   const bin = range <= 1440 ? '1h' : '6h'
-  const levels = useQueryData(`AgentEvents | where source == "${q(source)}" | summarize count() by bin(occurred_at, ${bin}), level`, range)
-  const byHost = useQueryData(`AgentEvents | where source == "${q(source)}" and level in ("error", "critical") | summarize count() by hostname | sort by count_ desc`, range)
+  const levels = useQueryData(`AgentEvents | where source == "${q(source)}" | summarize count() by bin(occurred_at, ${bin}), level`, range, { scoped: true })
+  const byHost = useQueryData(`AgentEvents | where source == "${q(source)}" and level in ("error", "critical") | summarize count() by hostname | sort by count_ desc`, range, { scoped: true })
   const logins = useQueryData(type === 'sqlserver'
     ? `AgentEvents | where source == "SQL Server" and message matches regex "^[0-9]+ failed" | project occurred_at, hostname, message | sort by occurred_at desc | take 20`
-    : null, range)
+    : null, range, { scoped: true })
   const { data: events } = useAgentEvents(undefined, 30, source)
 
   return (

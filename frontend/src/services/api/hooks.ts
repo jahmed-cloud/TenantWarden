@@ -92,6 +92,8 @@ export interface Agent {
   uptimeSeconds: number | null; lastSeenAt: string | null; lastHeartbeatAt: string | null
   inventoryAt: string | null; createdAt: string
   netRxBps: number | null; netTxBps: number | null; connections: string | null; tags: string | null
+  /** Comma-separated machine groups */
+  groups: string | null
 }
 export interface AgentStats { total: number; online: number; offline: number; windows: number; linux: number; macOs: number; docker: number }
 export interface AgentMetricPoint { t: string; cpu: number; cpuMax: number; mem: number; disk: number; rxMbps: number; txMbps: number }
@@ -271,10 +273,48 @@ export const useDeviceSummary = () => useTenantQuery<DeviceSummary>('device-summ
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 
-export const useAgents = () => useTenantQuery<Agent[]>('agents', (t) => `/v1/agents?tenantId=${t}`, { refetch: 30_000 })
-export const useAgentStats = () => useTenantQuery<AgentStats>('agent-stats', (t) => `/v1/agents/stats?tenantId=${t}`, { refetch: 30_000 })
-export const useAgentEvents = (agentId?: string, limit = 50, source?: string) =>
-  useTenantQuery<AgentEvent[]>('agent-events', (t) => `/v1/agents/events?${qs({ tenantId: t, agentId, limit, source })}`, { refetch: 60_000 })
+/** Every agent of the tenant, ignoring the machine scope (used to resolve it and to pick machines). */
+export const useAllAgents = () => useTenantQuery<Agent[]>('agents-all', (t) => `/v1/agents?tenantId=${t}`, { refetch: 60_000 })
+export const useAgentGroups = () => useTenantQuery<{ name: string; agents: number }[]>('agent-groups', (t) => `/v1/agents/groups?tenantId=${t}`)
+
+export interface ScopeInfo {
+  /** ?agents= value: undefined = every machine, 'none' = a scope that matches nothing */
+  param: string | undefined
+  label: string
+  active: boolean
+  count: number | null
+  total: number | null
+}
+
+/** The machine scope from the top bar, resolved to agent ids for the API. */
+export function useScope(): ScopeInfo {
+  const tenantId = useTenantId()
+  const scope = useTenantWardenStore((s) => s.machineScope)
+  const { data: all } = useAllAgents()
+  if (scope.kind === 'all' || scope.tenantId !== tenantId) return { param: undefined, label: 'All machines', active: false, count: all?.length ?? null, total: all?.length ?? null }
+  const ids = scope.kind === 'group'
+    ? (all ?? []).filter((a) => (a.groups ?? '').split(',').includes(scope.group)).map((a) => a.agentId)
+    : scope.ids.filter((id) => !all || all.some((a) => a.agentId === id))
+  const label = scope.kind === 'group' ? `Group: ${scope.group}` : ids.length === 1 ? all?.find((a) => a.agentId === ids[0])?.hostname ?? '1 machine' : `${ids.length} machines`
+  return { param: ids.length ? ids.join(',') : 'none', label, active: true, count: ids.length, total: all?.length ?? null }
+}
+
+export const useAgents = () => {
+  const { param } = useScope()
+  return useTenantQuery<Agent[]>('agents', (t) => `/v1/agents?${qs({ tenantId: t, agents: param })}`, { refetch: 30_000 })
+}
+export const useAgentStats = () => {
+  const { param } = useScope()
+  return useTenantQuery<AgentStats>('agent-stats', (t) => `/v1/agents/stats?${qs({ tenantId: t, agents: param })}`, { refetch: 30_000 })
+}
+export const useAgentEvents = (agentId?: string, limit = 50, source?: string) => {
+  const { param } = useScope()
+  return useTenantQuery<AgentEvent[]>('agent-events', (t) => `/v1/agents/events?${qs({ tenantId: t, agentId, limit, source, agents: agentId ? undefined : param })}`, { refetch: 60_000 })
+}
+export const useChangeGroups = () =>
+  useAction(({ tenantId, agentIds, add, remove }: { tenantId: string; agentIds: string[]; add?: string; remove?: string }) =>
+    patch<{ changed: number }>('/v1/agents/groups', { tenantId, agentIds, add, remove }),
+  { success: (r) => `${r.changed} machine${r.changed === 1 ? '' : 's'} updated`, invalidate: [['agents'], ['agents-all'], ['agent-groups'], ['agent-stats']] })
 export function useAgentMetrics(id: string | undefined, hours: number) {
   return useQuery({
     queryKey: ['agent-metrics', id, hours],
@@ -393,23 +433,37 @@ export interface EndpointCheck {
   statusCode: number | null; error: string | null; certDaysLeft: number | null; checkedAt: string; failingSince: string | null; stale: boolean
 }
 export interface CheckPoint { t: string; name: string; latencyMs: number | null; availability: number }
-export const useNetworkSummary = (hours: number) => useTenantQuery<NetworkSummary>('network', (t) => `/v1/network/summary?tenantId=${t}&hours=${hours}`, { refetch: 60_000 })
-export const useChecks = () => useTenantQuery<EndpointCheck[]>('checks', (t) => `/v1/network/checks?tenantId=${t}`, { refetch: 30_000 })
-export const useCheckHistory = (hours: number, name?: string) =>
-  useTenantQuery<CheckPoint[]>('check-history', (t) => `/v1/network/checks/history?${qs({ tenantId: t, hours, name })}`, { refetch: 60_000 })
+export const useNetworkSummary = (hours: number) => {
+  const { param } = useScope()
+  return useTenantQuery<NetworkSummary>('network', (t) => `/v1/network/summary?${qs({ tenantId: t, hours, agents: param })}`, { refetch: 60_000 })
+}
+export const useChecks = () => {
+  const { param } = useScope()
+  return useTenantQuery<EndpointCheck[]>('checks', (t) => `/v1/network/checks?${qs({ tenantId: t, agents: param })}`, { refetch: 30_000 })
+}
+export const useCheckHistory = (hours: number, name?: string) => {
+  const { param } = useScope()
+  return useTenantQuery<CheckPoint[]>('check-history', (t) => `/v1/network/checks/history?${qs({ tenantId: t, hours, name, agents: param })}`, { refetch: 60_000 })
+}
 
 export interface WorkloadRow {
   agentDbId: string; agentId: string; hostname: string; platform: string; online: boolean; type: string; name: string
   status: string; startup: string | null; version: string | null; details: string | null; seenAt: string | null
 }
-export const useWorkloads = () => useTenantQuery<WorkloadRow[]>('workloads', (t) => `/v1/workloads?tenantId=${t}`, { refetch: 60_000 })
+export const useWorkloads = () => {
+  const { param } = useScope()
+  return useTenantQuery<WorkloadRow[]>('workloads', (t) => `/v1/workloads?${qs({ tenantId: t, agents: param })}`, { refetch: 60_000 })
+}
 
 /** A query used as a dashboard widget (cached and refreshed like any other read). */
-export function useQueryData(query: string | null, windowMinutes: number | null, refetch = 60_000) {
+/** Runs a query for a page's chart; scoped = narrowed to the machines picked in the top bar. */
+export function useQueryData(query: string | null, windowMinutes: number | null, { refetch = 60_000, scoped = false } = {}) {
   const tenantId = useTenantId()
+  const { param } = useScope()
+  const agents = scoped ? param : undefined
   return useQuery({
-    queryKey: ['query-data', tenantId, query, windowMinutes],
-    queryFn: () => post<QueryResult>('/v1/query', { tenantId, query, windowMinutes, limit: 1000 }),
+    queryKey: ['query-data', tenantId, query, windowMinutes, agents],
+    queryFn: () => post<QueryResult>('/v1/query', { tenantId, query, windowMinutes, limit: 1000, agents }),
     enabled: !!tenantId && !!query,
     refetchInterval: refetch,
   })
