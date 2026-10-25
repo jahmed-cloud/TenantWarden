@@ -17,7 +17,12 @@ public interface IUserService
     Task EnableMfaAsync(Guid userId, string totpSecret, CancellationToken ct = default);
     Task UpdateLastLoginAsync(Guid userId, string ipAddress, CancellationToken ct = default);
     Task<string> GenerateApiKeyAsync(Guid userId, CancellationToken ct = default);
-    Task<PlatformUser?> GetByApiKeyAsync(string apiKey, CancellationToken ct = default);
+    Task<DateTime?> GetApiKeyCreatedAtAsync(Guid userId, CancellationToken ct = default);
+    Task RevokeApiKeyAsync(Guid userId, CancellationToken ct = default);
+    Task<PlatformUser> CreateUserAsync(string email, string displayName, string role, Guid? tenantId, string temporaryPassword, CancellationToken ct = default);
+    Task UpdateUserAsync(Guid id, string? role, bool? isActive, Guid? tenantId, bool clearTenant, CancellationToken ct = default);
+    Task SetTemporaryPasswordAsync(Guid id, string temporaryPassword, CancellationToken ct = default);
+    Task<PlatformUser?> GetAnyByIdAsync(Guid id, CancellationToken ct = default);
 }
 
 public class UserService : IUserService
@@ -129,27 +134,80 @@ public class UserService : IUserService
         }
     }
 
+    // API keys are 256 random bits, so a plain SHA-256 is enough (no brute-force risk) and lets the
+    // API look a key up by its hash in one indexed query. Must match ApiKeyAuthenticationHandler in api/.
+    public static string HashApiKey(string key) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
+
     public async Task<string> GenerateApiKeyAsync(Guid userId, CancellationToken ct = default)
     {
-        var rawKey  = $"grd_{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).Replace("+","-").Replace("/","_").TrimEnd('=')}";
-        var keyHash = BCrypt.Net.BCrypt.HashPassword(rawKey, workFactor: 10);
+        var rawKey = "twk_" + Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
+                                     .Replace("+", "-").Replace("/", "_").TrimEnd('=');
 
         await using var conn = new NpgsqlConnection(_connStr);
         await conn.ExecuteAsync(
-            "UPDATE platform_users SET api_key_hash = @keyHash, updated_at = NOW() WHERE id = @userId",
-            new { keyHash, userId });
+            @"UPDATE platform_users SET api_key_hash = @hash, api_key_created_at = NOW(), updated_at = NOW()
+              WHERE id = @userId",
+            new { hash = HashApiKey(rawKey), userId });
 
-        return rawKey; // Return raw only once — never stored in plain text
+        return rawKey; // shown once — only the hash is stored
     }
 
-    public async Task<PlatformUser?> GetByApiKeyAsync(string apiKey, CancellationToken ct = default)
+    public async Task<DateTime?> GetApiKeyCreatedAtAsync(Guid userId, CancellationToken ct = default)
     {
-        // Load all active users with api_key_hash set (paginated in production)
         await using var conn = new NpgsqlConnection(_connStr);
-        var candidates = await conn.QueryAsync<PlatformUser>(
-            "SELECT * FROM platform_users WHERE api_key_hash IS NOT NULL AND is_active = TRUE LIMIT 1000");
+        return await conn.ExecuteScalarAsync<DateTime?>(
+            "SELECT api_key_created_at FROM platform_users WHERE id = @userId AND api_key_hash IS NOT NULL", new { userId });
+    }
 
-        return candidates.FirstOrDefault(u => BCrypt.Net.BCrypt.Verify(apiKey, u.PasswordHash ?? ""));
+    public async Task RevokeApiKeyAsync(Guid userId, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.ExecuteAsync(
+            "UPDATE platform_users SET api_key_hash = NULL, api_key_created_at = NULL, updated_at = NOW() WHERE id = @userId",
+            new { userId });
+    }
+
+    // ── User administration ───────────────────────────────────────────────────
+
+    public async Task<PlatformUser> CreateUserAsync(string email, string displayName, string role, Guid? tenantId,
+        string temporaryPassword, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        return await conn.QueryFirstAsync<PlatformUser>(
+            @"INSERT INTO platform_users (email, display_name, role, tenant_id, is_active, password_hash, must_change_password)
+              VALUES (lower(@email), @displayName, @role::user_role, @tenantId, TRUE, @hash, TRUE)
+              RETURNING *",
+            new { email = email.Trim(), displayName = displayName.Trim(), role, tenantId,
+                  hash = BCrypt.Net.BCrypt.HashPassword(temporaryPassword, workFactor: 12) });
+    }
+
+    public async Task UpdateUserAsync(Guid id, string? role, bool? isActive, Guid? tenantId, bool clearTenant, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.ExecuteAsync(
+            @"UPDATE platform_users SET
+                role       = COALESCE(@role::user_role, role),
+                is_active  = COALESCE(@isActive, is_active),
+                tenant_id  = CASE WHEN @clearTenant THEN NULL ELSE COALESCE(@tenantId, tenant_id) END,
+                updated_at = NOW()
+              WHERE id = @id",
+            new { id, role, isActive, tenantId, clearTenant });
+    }
+
+    public async Task SetTemporaryPasswordAsync(Guid id, string temporaryPassword, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        await conn.ExecuteAsync(
+            @"UPDATE platform_users SET password_hash = @hash, must_change_password = TRUE, updated_at = NOW()
+              WHERE id = @id",
+            new { id, hash = BCrypt.Net.BCrypt.HashPassword(temporaryPassword, workFactor: 12) });
+    }
+
+    public async Task<PlatformUser?> GetAnyByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connStr);
+        return await conn.QueryFirstOrDefaultAsync<PlatformUser>("SELECT * FROM platform_users WHERE id = @id", new { id });
     }
 }
 

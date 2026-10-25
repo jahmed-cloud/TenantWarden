@@ -120,7 +120,7 @@ public class AuthController : ControllerBase
         if (!string.IsNullOrEmpty(refreshToken))
             await _tokens.RevokeRefreshTokenAsync(refreshToken, ct);
 
-        Response.Cookies.Delete("tenantwarden_refresh");
+        Response.Cookies.Delete("tenantwarden_refresh", new CookieOptions { Path = "/auth" });
         return NoContent();
     }
 
@@ -159,7 +159,17 @@ public class AuthController : ControllerBase
         return Ok(new { enabled = true });
     }
 
-    // POST /auth/api-keys  — generate a new API key
+    // GET /auth/api-keys — whether the signed-in user has an API key, and since when
+    [HttpGet("api-keys")]
+    [Authorize]
+    public async Task<IActionResult> ApiKeyStatus(CancellationToken ct)
+    {
+        var userId    = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var createdAt = await _users.GetApiKeyCreatedAtAsync(userId, ct);
+        return Ok(new { active = createdAt is not null, createdAt });
+    }
+
+    // POST /auth/api-keys — create (or rotate) the signed-in user's API key; sent as X-API-Key
     [HttpPost("api-keys")]
     [Authorize]
     public async Task<IActionResult> GenerateApiKey(CancellationToken ct)
@@ -167,6 +177,16 @@ public class AuthController : ControllerBase
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var key    = await _users.GenerateApiKeyAsync(userId, ct);
         return Ok(new { apiKey = key, note = "Store this key safely — it will not be shown again." });
+    }
+
+    // DELETE /auth/api-keys — revoke the signed-in user's API key
+    [HttpDelete("api-keys")]
+    [Authorize]
+    public async Task<IActionResult> RevokeApiKey(CancellationToken ct)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        await _users.RevokeApiKeyAsync(userId, ct);
+        return NoContent();
     }
 
     // POST /auth/change-password  — authenticated user rotates their own password
@@ -178,8 +198,8 @@ public class AuthController : ControllerBase
                   ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
                   ?? User.FindFirstValue("sub");
         if (!Guid.TryParse(sub, out var userId)) return Unauthorized();
-        if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8)
-            return BadRequest(new { error = "New password must be at least 8 characters" });
+        if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 12)
+            return BadRequest(new { error = "New password must be at least 12 characters" });
 
         var ok = await _users.ChangePasswordAsync(userId, req.CurrentPassword, req.NewPassword, ct);
         return ok ? Ok(new { status = "password changed" })
@@ -193,7 +213,9 @@ public class AuthController : ControllerBase
         Response.Cookies.Append("tenantwarden_refresh", token, new CookieOptions
         {
             HttpOnly  = true,
-            Secure    = true,
+            // Browsers drop Secure cookies on plain-HTTP origins other than localhost (e.g. a LAN IP),
+            // which would end every session after 15 minutes. HTTPS (via X-Forwarded-Proto) keeps Secure.
+            Secure    = Request.IsHttps,
             SameSite  = SameSiteMode.Strict,
             Expires   = expiry,
             Path      = "/auth",

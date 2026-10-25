@@ -66,6 +66,7 @@ try
     app.UseCors("auth");
     app.UseAuthentication();
     app.UseAuthorization();
+    app.UseMiddleware<AuditMiddleware>();
     app.MapControllers();
     app.MapHealthChecks("/health");
 

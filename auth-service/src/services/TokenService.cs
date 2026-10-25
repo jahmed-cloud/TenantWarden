@@ -23,15 +23,17 @@ public class TokenService : ITokenService
 {
     private readonly JwtOptions _jwt;
     private readonly IDatabase _redis;
+    private readonly IUserService _users;
     private readonly ILogger<TokenService> _log;
 
     private const string RefreshPrefix = "refresh:";
     private const string RevokedPrefix = "revoked:";
 
-    public TokenService(IOptions<JwtOptions> jwt, IConnectionMultiplexer redis, ILogger<TokenService> log)
+    public TokenService(IOptions<JwtOptions> jwt, IConnectionMultiplexer redis, IUserService users, ILogger<TokenService> log)
     {
         _jwt   = jwt.Value;
         _redis = redis.GetDatabase();
+        _users = users;
         _log   = log;
     }
 
@@ -95,12 +97,15 @@ public class TokenService : ITokenService
         var revoked = await _redis.KeyExistsAsync($"{RevokedPrefix}{refreshToken}");
         if (revoked) return null;
 
-        // Rotate: delete old, issue new
-        await _redis.KeyDeleteAsync($"{RefreshPrefix}{refreshToken}");
+        // Rotate: a refresh token works once. Deleting first means a replayed token finds nothing.
+        if (!await _redis.KeyDeleteAsync($"{RefreshPrefix}{refreshToken}")) return null;
 
-        // NOTE: In production, load user from DB here
-        // For now return null to indicate "load user and re-issue"
-        return null;
+        // Re-read the user so a deactivated account or a changed role takes effect at the next refresh
+        if (!Guid.TryParse(userId.ToString(), out var id)) return null;
+        var user = await _users.GetByIdAsync(id, ct);
+        if (user is null) return null;
+
+        return await IssueTokenPairAsync(user, ct);
     }
 
     public async Task RevokeRefreshTokenAsync(string refreshToken, CancellationToken ct = default)
