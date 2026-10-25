@@ -10,6 +10,10 @@
 
 **Consequences:** Operational complexity of two database systems; significant query performance improvement for analytics (10-100x vs PostgreSQL for time-series aggregations).
 
+**Status note (2026-10-25):** in practice PostgreSQL holds nearly everything, including posture and compliance
+history. ClickHouse holds agent metric history (`agent_metrics`, written by the API's telemetry consumer and read
+for the per-host charts) and custom events. Revisit when a dataset outgrows PostgreSQL.
+
 ---
 
 ## ADR-002: Go agent for cross-platform deployment

@@ -12,63 +12,47 @@
 ## Quickstart (local development)
 
 ```bash
-# 1. Clone
-git clone https://github.com/your-org/tenantwarden.git
-cd tenantwarden
-
-# 2. Configure environment
-make setup-env
-nano .env   # fill in required values (see below)
-
-# 3. Generate local TLS certs
-make certs
-
-# 4. Build all images
-make build
-
-# 5. Start everything
+git clone https://github.com/jahmed-cloud/TenantWarden.git
+cd TenantWarden
+make setup-env    # .env with fresh random secrets
+make certs        # development TLS certificates
+make build        # images, built in sequential batches
+make build-agent  # agent binaries for /downloads
 make up
-
-# 6. Open the dashboard
-open http://localhost
 ```
 
----
-
-## Required .env values
-
-| Variable                  | Description                                   |
-| ------------------------- | --------------------------------------------- |
-| `AZURE_CLIENT_ID`         | App registration client ID                    |
-| `AZURE_CLIENT_SECRET`     | App registration client secret                |
-| `AZURE_TENANT_ID`         | Primary Azure tenant ID                       |
-| `POSTGRES_PASSWORD`       | Strong PostgreSQL password                    |
-| `REDIS_PASSWORD`          | Strong Redis password                         |
-| `CLICKHOUSE_PASSWORD`     | Strong ClickHouse password                    |
-| `MINIO_ACCESS_KEY`        | MinIO access key (min 3 chars)                |
-| `MINIO_SECRET_KEY`        | MinIO secret key (min 8 chars)                |
-| `JWT_SIGNING_KEY`         | Random 64+ byte string for JWT signing        |
-| `GRAFANA_PASSWORD`        | Grafana admin password                        |
+Open http://localhost:8090 (or `GATEWAY_HTTP_PORT`) and sign in as `admin@tenantwarden.local` / `TenantWarden!`;
+you choose a new password at first sign-in.
 
 ---
 
-## Azure App Registration setup
+## .env
 
-1. Go to [portal.azure.com](https://portal.azure.com) → Entra ID → App registrations → New
-2. Set Redirect URI to `https://your-domain.com/auth/callback`
-3. Under **API permissions**, add the following **Application** permissions:
-   - `IdentityRiskyUser.Read.All`
-   - `AuditLog.Read.All`
-   - `Policy.Read.All`
-   - `DeviceManagementManagedDevices.Read.All`
-   - `SecurityIncident.Read.All`
-   - `SecurityAlert.Read.All`
-   - `SecurityEvents.Read.All`
-   - `ServiceHealth.Read.All`
-   - `Reports.Read.All`
-4. Click **Grant admin consent**
-5. Under **Certificates & secrets**, create a new client secret
-6. Copy the `Application (client) ID` and secret into `.env`
+`make setup-env` generates every secret. Keep a copy of `ENCRYPTION_KEY` somewhere safe: losing it makes the
+stored tenant client secrets unrecoverable. Values you may want to set yourself:
+
+| Variable | Description |
+| --- | --- |
+| `GATEWAY_HTTP_PORT` / `GATEWAY_HTTPS_PORT` | Host ports for the portal (default 8090 / 8443) |
+| `APP_URL` | Public URL of the portal |
+| `SMTP_*` | Mail server for email notification channels |
+| `SERVICENOW_*`, `JIRA_*` | Defaults for ServiceNow / Jira channels (a channel's own settings win) |
+| `COLLECTOR_INTERVAL_SECONDS` | Graph collection interval (default 900) |
+
+---
+
+## Connecting a Microsoft 365 tenant
+
+Tenants are connected in the portal (**Tenants → Connect tenant**), not in `.env`. For each tenant:
+
+1. Entra admin center → **App registrations → New registration** (single tenant, no redirect URI needed).
+2. **API permissions → Add → Microsoft Graph → Application permissions**:
+   `User.Read.All`, `IdentityRiskyUser.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`,
+   `DeviceManagementManagedDevices.Read.All`, `SecurityEvents.Read.All`, `SecurityIncident.Read.All`,
+   `ServiceHealth.Read.All`. For response actions also `IdentityRiskyUser.ReadWrite.All` and
+   `User.RevokeSessions.All`.
+3. **Grant admin consent**.
+4. **Certificates & secrets → New client secret**, then paste the tenant ID, client ID and secret value into the portal.
 
 ---
 
@@ -119,69 +103,38 @@ kubectl get pods -n tenantwarden
 
 ## Deploying agents
 
-### Windows
-
-```powershell
-# Download from dashboard or direct URL
-Invoke-WebRequest -Uri "https://your-domain.com/download/agent/windows" -OutFile tenantwarden-agent.exe
-
-# Register
-.\tenantwarden-agent.exe register --gateway-url wss://your-domain.com:4433 --agent-token YOUR_TOKEN
-
-# Start as service
-.\tenantwarden-agent.exe start
-```
-
-### Linux (systemd)
+Run `make build-agent` once so the portal serves the binaries at `/downloads/`. Then use **Agents → Add agent**
+in the portal: it creates an enrollment token and shows the exact command for Windows, Linux or macOS, e.g.
 
 ```bash
-# Download
-curl -fsSL https://your-domain.com/download/agent/linux -o /usr/local/bin/tenantwarden-agent
-chmod +x /usr/local/bin/tenantwarden-agent
+# Linux: downloads, checks the token and connection, installs a systemd service
+curl -fsSLo tenantwarden-agent https://your-domain.com/downloads/tenantwarden-agent-linux-amd64 && chmod +x tenantwarden-agent
+sudo ./tenantwarden-agent register --gateway-url wss://your-domain.com/agent --agent-token YOUR_TOKEN --install
+```
 
-# Register
-tenantwarden-agent register --gateway-url wss://your-domain.com:4433 --agent-token YOUR_TOKEN
-
-# Install as systemd service
-cat > /etc/systemd/system/tenantwarden-agent.service << EOF
-[Unit]
-Description=TenantWarden Agent
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/tenantwarden-agent start
-Restart=always
-RestartSec=10
-User=tenantwarden
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable --now tenantwarden-agent
+```powershell
+# Windows, elevated PowerShell: installs the TenantWardenAgent service
+Invoke-WebRequest -Uri "https://your-domain.com/downloads/tenantwarden-agent.exe" -OutFile tenantwarden-agent.exe
+.	enantwarden-agent.exe register --gateway-url "wss://your-domain.com/agent" --agent-token "YOUR_TOKEN" --install
 ```
 
 ### Docker
 
 ```bash
-docker run -d \
-  --name tenantwarden-agent \
-  --restart unless-stopped \
-  -e TENANTWARDEN_GATEWAY_URL=wss://your-domain.com:4433 \
-  -e TENANTWARDEN_AGENT_TOKEN=YOUR_TOKEN \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  ghcr.io/your-org/tenantwarden/agent:latest start
+docker build -t tenantwarden/agent:1.0.0 agent/
+docker run -d --name tenantwarden-agent --restart unless-stopped   -e TENANTWARDEN_GATEWAY_URL=wss://your-domain.com/agent   -e TENANTWARDEN_AGENT_TOKEN=YOUR_TOKEN   tenantwarden/agent:1.0.0
 ```
+
+The full agent guide (what it collects, files, commands, revoking) is in [docs/AGENT.md](../AGENT.md).
 
 ---
 
 ## Monitoring
 
-- Grafana dashboards: `http://localhost:3000` (admin / your GRAFANA_PASSWORD)
+- Grafana dashboards: `http://localhost:3001` (admin / your GRAFANA_PASSWORD; `make monitoring`)
 - Prometheus metrics: `http://localhost:9090`
-- API health: `http://localhost/api/health`
-- Agent gateway health: `http://localhost:8082/health`
+- API health: `docker exec tenantwarden-api curl -s localhost:8080/health` (internal only)
+- Agent gateway health: `docker exec tenantwarden-agent-gw curl -s localhost:8082/health`
 
 ---
 
