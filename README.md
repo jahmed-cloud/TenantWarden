@@ -1,15 +1,46 @@
-# TenantWarden
+<p align="center">
+  <a href="https://tenantwarden.org"><img src="docs/assets/tenantwarden-logo.svg" width="84" alt="TenantWarden logo"></a>
+</p>
 
-**Self-hosted security monitoring for Microsoft 365.**
+<h1 align="center">TenantWarden</h1>
 
-🌐 **[tenantwarden.org](https://tenantwarden.org)** · MIT licensed · created and maintained by **Junaid Ahmed**
+<p align="center">
+  <b>Self-hosted security monitoring for Microsoft 365 and the servers behind it.</b>
+</p>
+
+<p align="center">
+  <a href="https://tenantwarden.org"><b>tenantwarden.org</b></a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="docs/AGENT.md">Agent guide</a> ·
+  <a href="LICENSE">MIT licence</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/overview.png" width="100%"
+       alt="TenantWarden overview: open alerts, risky users, non-compliant devices, Secure Score, MFA coverage and agents, with alert and posture trends">
+</p>
 
 TenantWarden connects to your Microsoft 365 tenants through Microsoft Graph and watches identity risk,
 sign-ins, MFA coverage, Conditional Access, device compliance, Secure Score, Defender XDR incidents and
-service health. A small Go agent adds your Windows, Linux and macOS hosts: metrics, security events and a
-patch/encryption/firewall inventory. Everything lands in one dashboard, with alert rules, notifications,
-compliance scoring and reports. It runs on your own infrastructure with Docker Compose and handles several
-tenants from one install.
+service health. A small Go agent adds your Windows, Linux and macOS hosts: metrics, security events, server
+roles such as SQL Server and Active Directory, their logs, and a patch/encryption/firewall inventory.
+Everything lands in one dashboard, with alert rules, a query language, notifications, compliance scoring and
+reports. It runs on your own infrastructure with Docker Compose and handles several tenants from one install.
+
+Project website, with the latest on the project: **[tenantwarden.org](https://tenantwarden.org)**.
+Created and maintained by **Junaid Ahmed**.
+
+### Why TenantWarden
+
+- **One place for the cloud and the servers.** Entra ID risk, Defender incidents and Intune compliance sit next to
+  the SQL Server that just logged 14 failed logins and the web server whose health check started failing.
+- **Your data stays with you.** Everything runs on your own hardware or cloud account and tenant secrets are encrypted
+  at rest. Nothing leaves it except the Microsoft Graph calls and the notifications you configure.
+- **Built for more than one tenant.** MSPs and groups with several Microsoft 365 tenants switch between them from the
+  top bar; every user sees only the tenant they are allowed to.
+- **Open and scriptable.** MIT licensed, a REST API for every feature, and a KQL-style query language that turns any
+  question into an alert rule.
 
 ---
 
@@ -27,9 +58,79 @@ tenants from one install.
 | **Custom logs** | Watch any log file (glob, include/exclude regex, level detection), extra Windows event channels or journal units — set once in the portal's monitoring profile and pushed to every agent, or per host in `agent.yaml`. |
 | **Workloads** | Agents discover SQL Server (instances, edition, port, SQL Agent), IIS, Active Directory, DNS, DHCP, Hyper-V, nginx, Apache, MySQL, PostgreSQL, Redis, MongoDB, Docker and more, collect their logs (SQL Server failed logins and I/O errors, nginx/Apache/MySQL/PostgreSQL error logs …) and show a dashboard per role. |
 | **Network** | Throughput per host and fleet-wide, TCP connections, risky ports open to all interfaces, and TCP / HTTP / DNS endpoint checks run from inside your network with latency history and certificate expiry. |
+| **Machine groups** | Group hosts in the portal (SQL servers, Production, London …), filter the fleet by status, platform and group, and pick a group or individual machines in the top bar: Agents, Workloads and Network — including the role-log charts — follow that selection. |
 | **Analytics & compliance** | Period-over-period KPIs, mean time to acknowledge/resolve, alert sources, z-score anomaly detection on risky users; ISO 27001, NIST CSF and SOC 2 controls scored from live signals, with history. |
 | **Reports** | Executive summary (print to PDF), CSV exports of alerts, risky users, devices, agents and the audit log, and a full JSON snapshot. |
-| **Platform** | Role-based access (9 roles) with strict tenant isolation, local accounts with TOTP two-step sign-in and forced password change, 15-minute access tokens with rotating refresh tokens, per-user API keys, an audit log of every change, configurable data retention, light and dark theme. |
+| **Platform** | Role-based access (9 roles) with strict tenant isolation, local accounts with TOTP two-step sign-in and forced password change, 15-minute access tokens with rotating refresh tokens, per-user API keys, an audit log of every change, configurable data retention, light and dark theme in the tenantwarden.org palette. |
+
+---
+
+## Screenshots
+
+<sub>All screenshots use a synthetic demo tenant, “Northwind Traders”. No real customer data.</sub>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/alerts.png" alt="Alert queue with a 30-day volume chart, severity filters and sources">
+      <br><b>Alerts</b> — one queue for rule, Defender and agent alerts, with a 30-day trend, severity and source
+      filters, acknowledge with a comment, assign and resolve.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/identity.png" alt="Identity page with risky sign-ins per day, countries and risky users">
+      <br><b>Identity</b> — risky sign-ins by day and country, MFA coverage, Conditional Access, and risky users you can
+      dismiss, confirm compromised or sign out of every session from here.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/screenshots/agents.png" alt="Agent fleet with groups and status, platform and group filters">
+      <br><b>Agents</b> — the fleet at a glance: live status, CPU, memory, fullest disk, portal groups, and filters by
+      status, platform and group. Select hosts to group them.
+    </td>
+    <td valign="top">
+      <img src="docs/screenshots/agent-host.png" alt="Host details sheet with resource history and network throughput">
+      <br><b>Host details</b> — resource and network history from ClickHouse, a security checklist (updates, BitLocker,
+      firewall, Defender, SSH), discovered roles, certificates, software and events.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/screenshots/workloads.png" alt="Workloads page with SQL Server, Docker, nginx, Active Directory and DNS">
+      <br><b>Workloads</b> — every server role the agents found, what stopped unexpectedly, and per-role log charts:
+      SQL Server failed logins and I/O errors, nginx upstream errors, directory service warnings.
+    </td>
+    <td valign="top">
+      <img src="docs/screenshots/network.png" alt="Network page with fleet throughput and endpoint checks">
+      <br><b>Network</b> — fleet throughput, connections per host, risky ports open to all interfaces, and HTTP / TCP /
+      DNS checks run from inside your network.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/screenshots/query.png" alt="Query page with a KQL-style query and a bar chart of results">
+      <br><b>Query</b> — a KQL-style language over events, hosts, roles, checks, alerts, sign-ins and devices. Table or
+      chart, CSV export, and <i>Create alert rule</i> from any result.
+    </td>
+    <td valign="top">
+      <img src="docs/screenshots/scope.png" alt="Agents page scoped to the SQL servers group">
+      <br><b>Machine scope</b> — pick a group or hand-pick machines in the top bar; every endpoint page follows, and a
+      banner makes it obvious you are looking at a subset.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/screenshots/overview-dark.png" alt="Overview in the dark theme">
+      <br><b>Dark theme</b> — the navy and mint of <a href="https://tenantwarden.org">tenantwarden.org</a>, with
+      hairline panels instead of shadows.
+    </td>
+    <td valign="top">
+      <img src="docs/screenshots/login.png" alt="Sign-in page with the TenantWarden brand panel">
+      <br><b>Sign-in</b> — local accounts with TOTP two-step sign-in; Entra ID single sign-on is on the
+      <a href="TASK.md">roadmap</a>.
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -180,8 +281,9 @@ posture suits a private network or VPN. [TASK.md](TASK.md) tracks the work and
 ## About
 
 TenantWarden is designed, built and maintained by **Junaid Ahmed**
-([@jahmed-cloud](https://github.com/jahmed-cloud)). Project site: **[tenantwarden.org](https://tenantwarden.org)**.
+([@jahmed-cloud](https://github.com/jahmed-cloud)).
 
+- Website: **[tenantwarden.org](https://tenantwarden.org)**
 - Questions, bugs and ideas: [open an issue](https://github.com/jahmed-cloud/TenantWarden/issues)
 - Security reports: follow [SECURITY.md](SECURITY.md) rather than opening a public issue
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)

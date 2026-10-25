@@ -144,6 +144,58 @@ broken · P2 = correctness / hygiene · P3 = docs drift · P4 = tests & CI · P5
 - [ ] Query language: `extend`, `join`, `bin()` on numbers; saved queries; query-based dashboard tiles.
 - [ ] Log monitoring: multi-line records (stack traces), timestamps parsed from lines, Windows Event Log XPath filters.
 
+## Machine groups & filters (2026-10-26)
+
+- [x] Machine groups (`agents.groups`, migration 013), set in the portal: Agents → select hosts → Add to / Remove from
+      group. `GET/PATCH /v1/agents/groups`.
+- [x] Machine scope in the top bar (all machines, a group, or hand-picked hosts), kept per tenant. Agents, Workloads
+      (including the role-log charts) and Network follow it through `?agents=` / the query's `agents` list.
+- [x] Fleet filters on the Agents page: status, platform, group chips; search covers groups and tags.
+
+### Filter backlog
+- [ ] **Alert rules scoped to a group** (e.g. disk rule for "SQL servers" only): `scope` on `alert_rules`,
+      honoured by every agent metric in `ruleEvaluator.ts`.
+- [ ] **Monitoring profile targeting by portal group** (today: host names, agent tags, platform).
+- [ ] **Dynamic groups**: membership by OS, platform, tag, discovered role, IP range / subnet or host-name pattern,
+      re-evaluated as agents report.
+- [ ] **Saved views per user**: named filter sets (scope + page filters), a default view, shareable by URL.
+- [ ] **More fleet filters**: OS version, agent version (outdated), last report age, role (has SQL Server …),
+      pending updates, failing security checks; multi-select chips.
+- [ ] **Alerts and agent events filtered by machine or group** (Alerts page, Recent events, alert list API).
+- [ ] **Overview and Reports scoped to a group** (endpoint KPIs, executive summary per group).
+- [ ] **Query page scope**: optional "apply machine scope" toggle (the API already accepts `agents`), and a
+      `groups` field on AgentEvents / Checks so queries can filter by group directly.
+- [ ] Group admin page: rename, merge, delete a group, and a group description.
+- [ ] URL-encode the scope (`?scope=group:web`) so a filtered page can be bookmarked or shared.
+
+## Brand & website (2026-10-26)
+
+- [x] Portal uses the tenantwarden.org identity: the shield mark (favicon + inline `Logo`), navy/mint palette
+      (dark mode matches the site), DM Sans / Space Grotesk / DM Mono bundled via @fontsource, website links in the
+      sidebar, account menu and sign-in page.
+- [x] Motion: logo draws itself and its watch point pings, pages fade up on navigation, dialogs scale in, sheets slide
+      in, menus pop, online hosts pulse, sign-in hero floats. All off under `prefers-reduced-motion`.
+- [x] README screenshots (synthetic "Northwind Traders" tenant) in `docs/screenshots/`.
+- [x] Fixed on the way: dialogs opened from the top bar were clipped inside it (Dialog/Sheet now portal to `<body>`);
+      nginx `api_limit` of 60 r/m blanked pages after a few clicks (now 600 r/m, burst 120, answers 429);
+      long bar-chart labels were clipped and the bar legend swatch didn't match.
+- [ ] **Agent PowerShell trips Microsoft Defender**: a Windows host reported `Trojan:PowerShell/Agentl!MSR` on
+      2026-10-25, most likely the agent's `-EncodedCommand` scripts (inventory, events, discovery). Write the scripts
+      to `%ProgramData%\TenantWarden\scripts\*.ps1` and run them with `-File`, sign them, and document a Defender
+      exclusion / submit the binary to Microsoft as a false positive.
+- [ ] nginx: `/auth/me` and `/auth/refresh` share `auth_limit` (10 r/m) with sign-in, so a few quick reloads get 429
+      and the account menu shows "?". Keep the strict zone for login / MFA / password endpoints only.
+- [ ] Brand assets beyond the portal: PNG app icons + web manifest (PWA install), apple-touch-icon, social card for
+      the repo, logo in notification e-mails / Teams cards and in the executive report, Windows agent `.exe` icon and
+      version resource.
+- [ ] Dark-first option: follow the OS theme by default (`theme: 'system'`) and remember per user server-side.
+- [ ] Repeatable screenshots: commit the demo dataset and the headless capture script (`make screenshots`), so the
+      README images can be regenerated after UI changes.
+- [ ] Richer `make demo-data`: the Contoso seed has no Secure Score history, sign-ins, incidents or agents; reuse the
+      Northwind dataset.
+- [ ] Website ↔ portal: changelog / release notes on tenantwarden.org linked from the portal's "What's new", and a
+      version check against the latest GitHub release.
+
 ## P5 — New features (proposed)
 
 - [x] Alert rule builder, user & role management, enrollment-token UI, Defender incident view, on-demand reports

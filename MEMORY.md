@@ -107,6 +107,11 @@ enrollment-token registry, pub/sub. MinIO is registered in the API but unused (`
   rule library reads it. Rule `condition` = `{metric, operator, param?, query?}`; `param` is a per-item limit
   ("CPU above 95"), `threshold` the count. New metric = a catalogue entry + a `case` in
   [ruleEvaluator.ts](alert-engine/src/evaluators/ruleEvaluator.ts).
+- **Machine groups & scope:** groups are set in the portal (`PATCH /v1/agents/groups {tenantId, agentIds, add?, remove?}`,
+  names `^[A-Za-z0-9 ._-]{1,40}$`). The top-bar picker ([MachineScope.tsx](frontend/src/components/MachineScope.tsx)) stores a
+  scope per tenant (all / group / machines); `useScope()` resolves it to agent ids and the agent, network and workload hooks
+  send `?agents=id,id` (`AgentFilter.Parse`: empty → all, unparseable → `Guid.Empty`, i.e. nothing; `agents=none` for an
+  empty scope). `POST /v1/query` takes the same `agents` list and narrows datasets that declare an `agent` column.
 - **Query language** ([kql.ts](alert-engine/src/query/kql.ts)): KQL-style pipeline compiled to nested parameterised SQL
   over the whitelisted datasets in [datasets.ts](alert-engine/src/query/datasets.ts); `$1` is always the tenant; runs in
   a READ ONLY transaction with an 8 s statement timeout. `custom_query` rules: no summarize → row count; `summarize … by`
@@ -118,7 +123,8 @@ enrollment-token registry, pub/sub. MinIO is registered in the API but unused (`
   certificates every 5 min). Network throughput goes to ClickHouse `rx_bps`/`tx_bps` (the old `bytes_*` columns held
   cumulative counters and are no longer read).
 - **Client IP / rate limiting:** `UseForwardedHeaders` (ForwardLimit 1) in both .NET services; rate limiting only in
-  nginx (`api_limit` 60 r/m, `auth_limit` 10 r/m, per IP).
+  nginx (`api_limit` 600 r/m burst 120, `auth_limit` 10 r/m, per IP; rejects with 429). 60 r/m blanked pages: one
+  page fires 5–10 calls and polls, and an office behind NAT shares one address.
 - **Audit log:** API `AuditLogMiddleware` and auth-service `AuditMiddleware` write one `audit_logs` row per
   authenticated POST/PUT/PATCH/DELETE (`action = "<method> <controller action>"`); logins are written by `UserService`.
 - **Secrets:** tenant Graph client secrets are AES-256-GCM, `base64(nonce[12] | tag[16] | ciphertext)`, key =
@@ -130,7 +136,13 @@ enrollment-token registry, pub/sub. MinIO is registered in the API but unused (`
   calls and types in [hooks.ts](frontend/src/services/api/hooks.ts). **Colours are Material 3 roles** defined as CSS
   variables in [index.css](frontend/src/index.css) (`bg-surface-container-lowest`, `text-on-surface-variant`,
   `bg-primary-container`…), so dark mode needs no `dark:` classes. Charts never show placeholder numbers: no data →
-  `EmptyChart`. Zustand persists only theme, nav state and the active tenant (`tenantwarden-store`, v2).
+  `EmptyChart`. Zustand persists only theme, nav state, the active tenant and the machine scope (`tenantwarden-store`, v2).
+- **Brand (tenantwarden.org):** navy `#0b1220` + mint `#7ce6c5`. Light mode primary is teal `rgb(0 107 85)` for contrast;
+  dark mode uses the site's navy panels and hairline borders (`--shadow-e*` vars). Fixed brand colours: `brand-*` in
+  tailwind.config.js. Fonts DM Sans / Space Grotesk (`font-display`, headings) / DM Mono, bundled with @fontsource.
+  Logo and wordmark: [Brand.tsx](frontend/src/components/Brand.tsx) (inline SVG of the site's mark). Motion: `animate-*`
+  utilities (Tailwind keyframes) plus `tw-draw` / `tw-ping` / `tw-live` in index.css; all off under reduced motion.
+  `Dialog` and `Sheet` portal to `<body>` (the top bar's backdrop-blur traps fixed children).
 - **Redis keys:** `agent_heartbeat:{agentId}` (120 s TTL), `agent_tenant:{agentId}`, `agent_token:{jti}` (owning tenant),
   `agent_token_revoked:{jti}`, `agent_tokens:{tenantId}` (hash: token metadata for the portal list),
   `agent_profile:{tenantId}` (monitoring profile JSON, re-synced from Postgres when the API starts),
@@ -144,7 +156,7 @@ enrollment-token registry, pub/sub. MinIO is registered in the API but unused (`
 
 ## 4. Database
 
-PostgreSQL migrations in [postgres/migrations/](postgres/migrations/) (001–012) run automatically only on a
+PostgreSQL migrations in [postgres/migrations/](postgres/migrations/) (001–013) run automatically only on a
 **fresh** volume. Otherwise run `make seed`, which re-applies all of them (idempotent) and the ClickHouse schema.
 
 `tenants, platform_users, alerts, agents, agent_events, risky_users, risky_signins, managed_devices, ca_policies,
@@ -158,6 +170,7 @@ compliance_controls, compliance_assessments, compliance_history, retention_confi
 - **012** adds `endpoint_checks` (latest per agent + check) and `endpoint_check_results` (history, 14-day retention),
   `agent_profiles`, agent `net_rx_bps / net_tx_bps / connections`, and grows the default rules to 15 (disk, CPU,
   brute force, audit log cleared, firewall, antivirus, endpoint checks, SQL Server stopped, certificates, admins without MFA).
+- **013** adds agent `groups TEXT[]` (portal machine groups, GIN-indexed). Separate from `tags`, which the agent config owns.
 - Every tenant-owned table cascades on tenant delete, except `platform_users` and `audit_logs` (SET NULL).
 - **Default admin:** `admin@tenantwarden.local` / `TenantWarden!` with `must_change_password` (migration 003).
 - ClickHouse ([001_analytics_schema.sql](clickhouse/migrations/001_analytics_schema.sql)): `agent_metrics`
@@ -213,6 +226,7 @@ make seed        # (re)apply Postgres migrations + ClickHouse schema
 | Endpoint agent (Windows, Linux) | ✅ | register/start verified on both; `--install` service setup ⚠️ not yet run on a real host |
 | Agent macOS | ⚠️ | Metrics + minimal inventory, no events, no service installer |
 | Agent telemetry → dashboard | ✅ | Fleet, host sheet, metric history (ClickHouse), events, inventory checks |
+| Machine groups + scope filter | ✅ | Groups in the portal; top-bar scope filters Agents, Workloads, Network. Rules/alerts/reports not scoped yet (TASK.md) |
 | Enrollment tokens (create / list / revoke) | ✅ | |
 | Local login, TOTP two-step, forced password change | ✅ | Password change enforced in the UI only; TOTP secret plaintext |
 | Refresh tokens | ✅ | Rotating, one-time use |
