@@ -156,6 +156,12 @@ public class Agent : BaseEntity
     public double?         CpuPercent     { get; set; }
     public double?         MemoryPercent  { get; set; }
     public double?         DiskPercent    { get; set; }
+    public long?           UptimeSeconds  { get; set; }
+    public long?           NetRxBps       { get; set; }
+    public long?           NetTxBps       { get; set; }
+    /// <summary>JSON: established / listen / time_wait / close_wait connection counts</summary>
+    public string?         Connections    { get; set; }
+    public DateTime?       InventoryAt    { get; set; }
     public string?         Tags           { get; set; }
 
     public Tenant?         Tenant         { get; set; }

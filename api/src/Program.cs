@@ -35,7 +35,7 @@ try
         .AddTenantWardenCache(builder.Configuration)
         .AddTenantWardenKafka(builder.Configuration)
         .AddTenantWardenStorage(builder.Configuration)
-        .AddTenantWardenServices()
+        .AddTenantWardenServices(builder.Configuration)
         .AddTenantWardenBackgroundJobs(builder.Configuration)
         .AddTenantWardenObservability()
         .AddTenantWardenHealthChecks(builder.Configuration);

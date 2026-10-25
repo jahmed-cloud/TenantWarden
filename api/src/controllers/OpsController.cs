@@ -20,6 +20,8 @@ public class OpsController : ControllerBase
         try
         {
             var resp = await Http.PostAsync("http://collector-service:3001/collect", null, ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.Conflict)
+                return Conflict(new { error = "A collection is already running; new data appears when it finishes" });
             var body = await resp.Content.ReadAsStringAsync(ct);
             return StatusCode((int)resp.StatusCode, body);
         }
@@ -29,13 +31,4 @@ public class OpsController : ControllerBase
             return StatusCode(502, new { error = "collector unreachable" });
         }
     }
-
-    /// <summary>Alert evaluation runs continuously in alert-engine; this ack keeps external triggers happy.</summary>
-    [HttpPost("alerts/evaluate")]
-    [AllowAnonymous]
-    public IActionResult EvaluateAlerts() => Accepted(new { status = "alert engine evaluates continuously (60s loop)" });
-
-    [HttpPost("analytics/analyze")]
-    [AllowAnonymous]
-    public IActionResult Analyze() => Accepted(new { status = "analytics engine runs continuously (5m loop)" });
 }

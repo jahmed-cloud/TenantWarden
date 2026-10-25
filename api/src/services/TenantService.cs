@@ -78,6 +78,10 @@ public class TenantService : ITenantService
 
         _log.LogInformation("Tenant created {TenantId} {Name}", id, req.DisplayName);
 
+        // Starter alert rules (migration 011) so a new tenant is monitored from the first collection
+        try { await conn.ExecuteAsync("SELECT create_default_alert_rules(@id)", new { id }); }
+        catch (Npgsql.PostgresException ex) { _log.LogWarning(ex, "Default alert rules not created for {TenantId} — run make seed", id); }
+
         return new Tenant
         {
             Id             = id,
@@ -110,7 +114,9 @@ public class TenantService : ITenantService
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         await using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync("UPDATE tenants SET status = 'paused', updated_at = NOW() WHERE id = @id", new { id });
+        // Collected data cascades; platform users and audit entries keep their rows with tenant_id cleared.
+        // Pausing (PATCH status=paused) is the way to stop collection but keep the data.
+        await conn.ExecuteAsync("DELETE FROM tenants WHERE id = @id", new { id });
     }
 
     public async Task UpdateSyncMetadataAsync(Guid id, int userCount, int deviceCount, string? error, CancellationToken ct = default)

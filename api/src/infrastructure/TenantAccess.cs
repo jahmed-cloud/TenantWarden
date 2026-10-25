@@ -33,4 +33,8 @@ public static class TenantAccess
     /// <summary>Platform user id — JwtBearer maps "sub" to NameIdentifier on the way in.</summary>
     public static string UserId(this ClaimsPrincipal user)
         => user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("sub") ?? string.Empty;
+
+    /// <summary>Who did something, as people read it: the email, else the user id.</summary>
+    public static string Actor(this ClaimsPrincipal user)
+        => user.FindFirstValue(ClaimTypes.Email) ?? user.FindFirstValue("email") ?? user.UserId();
 }

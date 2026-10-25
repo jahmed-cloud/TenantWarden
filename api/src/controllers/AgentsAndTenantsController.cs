@@ -71,6 +71,42 @@ public class AgentsController : ControllerBase
         return Ok(await _agents.GetStatsAsync(tenantId, ct));
     }
 
+    // GET /api/v1/agents/{id}/metrics?hours=24 — CPU / memory / disk history from ClickHouse
+    [HttpGet("{id:guid}/metrics")]
+    public async Task<IActionResult> Metrics(Guid id, [FromQuery] int hours = 24, CancellationToken ct = default)
+    {
+        var agent = await _agents.GetByIdAsync(id, ct);
+        if (agent is null || !User.CanAccessTenant(agent.TenantId)) return NotFound();
+        try
+        {
+            return Ok(await _agents.GetMetricsAsync(agent.TenantId, Guid.Parse(agent.AgentId), hours, ct));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(503, new { error = "Metrics history is unavailable (ClickHouse is not reachable)" });
+        }
+    }
+
+    // GET /api/v1/agents/{id}/inventory — latest services / updates / disks / BitLocker snapshot
+    [HttpGet("{id:guid}/inventory")]
+    public async Task<IActionResult> Inventory(Guid id, CancellationToken ct)
+    {
+        var agent = await _agents.GetByIdAsync(id, ct);
+        if (agent is null || !User.CanAccessTenant(agent.TenantId)) return NotFound();
+        var json = await _agents.GetInventoryJsonAsync(id, ct);
+        return Content(json ?? "{}", "application/json");
+    }
+
+    // GET /api/v1/agents/events?tenantId=…&agentId=…&source=… — events reported by agents
+    // (source "SQL Server" for one source, "log:" for every custom log)
+    [HttpGet("events")]
+    public async Task<IActionResult> Events([FromQuery] Guid tenantId, [FromQuery] Guid? agentId, [FromQuery] string? source,
+        [FromQuery] int limit = 100, CancellationToken ct = default)
+    {
+        if (!User.CanAccessTenant(tenantId)) return Forbid();
+        return Ok(await _agents.GetEventsAsync(tenantId, agentId, limit, source, ct));
+    }
+
     // POST /api/v1/agents/enrollment-tokens — token for `tenantwarden-agent --agent-token`
     [HttpPost("enrollment-tokens")]
     [Authorize(Roles = "super_admin,org_admin,security_admin")]
@@ -79,8 +115,17 @@ public class AgentsController : ControllerBase
         if (!User.CanAccessTenant(req.TenantId)) return Forbid();
         if (await _tenants.GetByIdAsync(req.TenantId, ct) is null) return NotFound(new { error = "Tenant not found" });
 
-        var token = await _agents.IssueEnrollmentTokenAsync(req.TenantId, req.ExpiresInDays ?? 365, User.UserId(), ct);
+        var token = await _agents.IssueEnrollmentTokenAsync(req.TenantId, req.ExpiresInDays ?? 365, User.Actor(), ct);
         return Ok(token);
+    }
+
+    // GET /api/v1/agents/enrollment-tokens?tenantId= — unexpired tokens (ids and dates only)
+    [HttpGet("enrollment-tokens")]
+    [Authorize(Roles = "super_admin,org_admin,security_admin")]
+    public async Task<IActionResult> ListEnrollmentTokens([FromQuery] Guid tenantId, CancellationToken ct)
+    {
+        if (!User.CanAccessTenant(tenantId)) return Forbid();
+        return Ok(await _agents.ListEnrollmentTokensAsync(tenantId, ct));
     }
 
     // DELETE /api/v1/agents/enrollment-tokens/{tokenId} — agents using it are refused on next connect

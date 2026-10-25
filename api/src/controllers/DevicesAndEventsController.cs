@@ -17,13 +17,15 @@ public class DevicesController : ControllerBase
 
     [HttpGet]
     public async Task<IActionResult> List(
-        [FromQuery] Guid tenantId,
-        [FromQuery] int page     = 1,
-        [FromQuery] int pageSize = 50,
+        [FromQuery] Guid    tenantId,
+        [FromQuery] string? search,
+        [FromQuery] string? compliance,          // compliant | noncompliant
+        [FromQuery] int     page     = 1,
+        [FromQuery] int     pageSize = 50,
         CancellationToken ct = default)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
-        return Ok(await _devices.ListAsync(tenantId, page, pageSize, ct));
+        return Ok(await _devices.ListAsync(tenantId, page, pageSize, search, compliance, ct));
     }
 
     [HttpGet("{deviceId}")]

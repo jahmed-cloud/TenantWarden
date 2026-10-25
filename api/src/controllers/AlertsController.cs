@@ -62,7 +62,7 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> Acknowledge(Guid id, [FromBody] AcknowledgeRequest req, CancellationToken ct)
     {
         if (!await CanAccessAlertAsync(id, ct)) return NotFound();
-        var userId = User.UserId();
+        var userId = User.Actor();
         await _alerts.AcknowledgeAsync(id, userId, req.Comment, ct);
         _log.LogInformation("Alert {AlertId} acknowledged by {UserId}", id, userId);
         return NoContent();
@@ -74,7 +74,7 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> Resolve(Guid id, [FromBody] ResolveRequest req, CancellationToken ct)
     {
         if (!await CanAccessAlertAsync(id, ct)) return NotFound();
-        var userId = User.UserId();
+        var userId = User.Actor();
         await _alerts.ResolveAsync(id, userId, req.Resolution, ct);
         _log.LogInformation("Alert {AlertId} resolved by {UserId}", id, userId);
         return NoContent();
@@ -97,6 +97,14 @@ public class AlertsController : ControllerBase
         if (!User.TryScopeTenant(tenantId, out var scoped)) return Forbid();
         var counts = await _alerts.GetCountsAsync(scoped, ct);
         return Ok(counts);
+    }
+
+    // GET /api/v1/alerts/trend — alerts raised per day, split by severity
+    [HttpGet("trend")]
+    public async Task<IActionResult> Trend([FromQuery] Guid? tenantId, [FromQuery] int days = 14, CancellationToken ct = default)
+    {
+        if (!User.TryScopeTenant(tenantId, out var scoped)) return Forbid();
+        return Ok(await _alerts.GetTrendAsync(scoped, days, ct));
     }
 
     // POST /api/v1/alerts  (create custom alert — e.g. from custom data ingestion)
@@ -152,5 +160,6 @@ public record CreateAlertRequest(
     string        Category,
     List<string>? AffectedUsers   = null,
     List<string>? AffectedDevices = null,
-    string?       Metadata        = null
+    string?       Metadata        = null,
+    string?       ExternalId      = null    // source record id (incident, agent event…) for de-duplication
 );

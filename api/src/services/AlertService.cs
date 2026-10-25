@@ -3,6 +3,8 @@ using TenantWarden.Api.Hubs;
 using Dapper;
 using TenantWarden.Api.Models;
 using TenantWarden.Api.Infrastructure;
+using StackExchange.Redis;
+using System.Text.Json;
 
 namespace TenantWarden.Api.Services;
 
@@ -17,19 +19,25 @@ public interface IAlertService
     Task DeleteAsync(Guid id, CancellationToken ct = default);
     Task<AlertCounts> GetCountsAsync(Guid? tenantId, CancellationToken ct = default);
     Task<List<Alert>> GetRecentAsync(Guid tenantId, int limit = 10, CancellationToken ct = default);
+    Task<List<object>> GetTrendAsync(Guid? tenantId, int days, CancellationToken ct = default);
 }
 
 public class AlertService : IAlertService
 {
+    // notification-service subscribes to this channel and dispatches to the tenant's channels
+    public static readonly RedisChannel NotificationChannel = RedisChannel.Literal("tenantwarden:alerts");
+
     private readonly IDbConnectionFactory _db;
     private readonly ITenantWardenHubPublisher _hub;
+    private readonly IConnectionMultiplexer _redis;
     private readonly ILogger<AlertService> _log;
 
-    public AlertService(IDbConnectionFactory db, ITenantWardenHubPublisher hub, ILogger<AlertService> log)
+    public AlertService(IDbConnectionFactory db, ITenantWardenHubPublisher hub, IConnectionMultiplexer redis, ILogger<AlertService> log)
     {
-        _db  = db;
-        _hub = hub;
-        _log = log;
+        _db    = db;
+        _hub   = hub;
+        _redis = redis;
+        _log   = log;
     }
 
     public async Task<PagedResult<Alert>> ListAsync(AlertQuery q, CancellationToken ct = default)
@@ -72,10 +80,10 @@ public class AlertService : IAlertService
         var alert = await conn.QueryFirstAsync<Alert>(
             @"INSERT INTO alerts
                 (tenant_id, title, description, severity, status, source, category,
-                 affected_users, affected_devices, metadata)
+                 affected_users, affected_devices, metadata, external_id)
               VALUES
                 (@TenantId, @Title, @Description, @Severity::alert_severity, 'active',
-                 @Source::alert_source, @Category, @AffectedUsers, @AffectedDevices, @Metadata::jsonb)
+                 @Source::alert_source, @Category, @AffectedUsers, @AffectedDevices, @Metadata::jsonb, @ExternalId)
               RETURNING *",
             new
             {
@@ -86,13 +94,39 @@ public class AlertService : IAlertService
                 AffectedUsers   = req.AffectedUsers?.ToArray() ?? [],
                 AffectedDevices = req.AffectedDevices?.ToArray() ?? [],
                 Metadata        = req.Metadata,
+                req.ExternalId,
             });
 
         // Push live via SignalR
         await _hub.PublishAlert(req.TenantId.ToString(), alert);
+        await PublishNotificationAsync(alert);
 
         _log.LogInformation("Alert created {AlertId} severity:{Severity}", alert.Id, alert.Severity);
         return alert;
+    }
+
+    /// <summary>Hands the alert to notification-service (Teams, Slack, email, …) via Redis.</summary>
+    private async Task PublishNotificationAsync(Alert alert)
+    {
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                tenantId = alert.TenantId,
+                alert = new
+                {
+                    id = alert.Id, tenantId = alert.TenantId, title = alert.Title, description = alert.Description,
+                    severity = alert.Severity.ToPg(), status = alert.Status.ToPg(), source = alert.Source.ToPg(),
+                    category = alert.Category, affectedUsers = alert.AffectedUsers,
+                    recommendedAction = alert.RecommendedAction, createdAt = alert.CreatedAt,
+                },
+            });
+            await _redis.GetSubscriber().PublishAsync(NotificationChannel, payload);
+        }
+        catch (RedisException ex)
+        {
+            _log.LogWarning(ex, "Could not queue notifications for alert {AlertId}", alert.Id);
+        }
     }
 
     public async Task AcknowledgeAsync(Guid id, string userId, string? comment, CancellationToken ct = default)
@@ -101,11 +135,13 @@ public class AlertService : IAlertService
         await conn.ExecuteAsync(
             @"UPDATE alerts SET
                 status = 'acknowledged',
-                assigned_to = @userId,
+                assigned_to = COALESCE(NULLIF(assigned_to, ''), @userId),
                 acknowledged_at = NOW(),
+                metadata = CASE WHEN @comment IS NULL THEN metadata
+                                ELSE COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('ackComment', @comment, 'ackBy', @userId) END,
                 updated_at = NOW()
               WHERE id = @id AND status = 'active'",
-            new { id, userId });
+            new { id, userId, comment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim() });
     }
 
     public async Task ResolveAsync(Guid id, string userId, string resolution, CancellationToken ct = default)
@@ -115,10 +151,11 @@ public class AlertService : IAlertService
             @"UPDATE alerts SET
                 status = 'resolved',
                 resolution = @resolution,
+                assigned_to = COALESCE(NULLIF(assigned_to, ''), @userId),
                 resolved_at = NOW(),
                 updated_at = NOW()
               WHERE id = @id",
-            new { id, resolution });
+            new { id, resolution, userId });
     }
 
     public async Task AssignAsync(Guid id, string assigneeId, CancellationToken ct = default)
@@ -158,6 +195,26 @@ public class AlertService : IAlertService
             "SELECT * FROM alerts WHERE tenant_id = @tenantId ORDER BY created_at DESC LIMIT @limit",
             new { tenantId, limit });
         return items.ToList();
+    }
+
+    /// <summary>Alerts raised per day, split by severity (zero-filled).</summary>
+    public async Task<List<object>> GetTrendAsync(Guid? tenantId, int days, CancellationToken ct = default)
+    {
+        await using var conn = _db.CreateConnection();
+        var rows = await conn.QueryAsync(
+            @"SELECT to_char(d, 'YYYY-MM-DD') AS date,
+                     COUNT(a.id) FILTER (WHERE a.severity = 'critical')::int AS critical,
+                     COUNT(a.id) FILTER (WHERE a.severity = 'high')::int     AS high,
+                     COUNT(a.id) FILTER (WHERE a.severity = 'medium')::int   AS medium,
+                     COUNT(a.id) FILTER (WHERE a.severity IN ('low', 'info'))::int AS low,
+                     COUNT(a.id) FILTER (WHERE a.status = 'resolved')::int   AS resolved
+              FROM generate_series(date_trunc('day', NOW()) - make_interval(days => @days - 1), date_trunc('day', NOW()), INTERVAL '1 day') d
+              LEFT JOIN alerts a
+                     ON (@tenantId::uuid IS NULL OR a.tenant_id = @tenantId)
+                    AND a.created_at >= d AND a.created_at < d + INTERVAL '1 day'
+              GROUP BY d ORDER BY d",
+            new { tenantId, days = Math.Clamp(days, 1, 180) });
+        return rows.Cast<object>().ToList();
     }
 }
 

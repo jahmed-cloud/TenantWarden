@@ -35,7 +35,18 @@ public static class ServiceRegistration
     {
         var jwtKey = cfg["Auth:Jwt:SigningKey"] ?? throw new InvalidOperationException("JWT signing key required");
 
-        s.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        // Bearer JWT for people, X-API-Key for integrations — one policy scheme picks per request
+        s.AddAuthentication(opt =>
+         {
+             opt.DefaultScheme          = "BearerOrApiKey";
+             opt.DefaultChallengeScheme = "BearerOrApiKey";
+         })
+         .AddPolicyScheme("BearerOrApiKey", "Bearer token or API key", opt =>
+             opt.ForwardDefaultSelector = ctx => ctx.Request.Headers.ContainsKey(ApiKeyAuthenticationHandler.HeaderName)
+                 ? ApiKeyAuthenticationHandler.SchemeName
+                 : JwtBearerDefaults.AuthenticationScheme)
+         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+             ApiKeyAuthenticationHandler.SchemeName, null)
          .AddJwtBearer(opt =>
          {
              opt.TokenValidationParameters = new TokenValidationParameters
@@ -98,8 +109,19 @@ public static class ServiceRegistration
         return s;
     }
 
-    public static IServiceCollection AddTenantWardenServices(this IServiceCollection s)
+    public static IServiceCollection AddTenantWardenServices(this IServiceCollection s, IConfiguration cfg)
     {
+        s.AddHttpClient<IRemediationClient, RemediationClient>(c =>
+        {
+            c.BaseAddress = new Uri(cfg["Collector:Url"] ?? "http://collector-service:3001/");
+            c.Timeout     = TimeSpan.FromSeconds(30);
+        });
+        s.AddHttpClient<IAlertEngineClient, AlertEngineClient>(c =>
+        {
+            c.BaseAddress = new Uri(cfg["AlertEngine:Url"] ?? "http://alert-engine:3002/");
+            c.Timeout     = TimeSpan.FromSeconds(15);
+        });
+        s.AddHostedService<AgentTelemetryConsumer>();
         s.AddScoped<IAlertService, AlertService>();
         s.AddScoped<IIdentityService, IdentityService>();
         s.AddScoped<IDeviceService, DeviceService>();
@@ -108,7 +130,6 @@ public static class ServiceRegistration
         s.AddScoped<IAnalyticsService, AnalyticsService>();
         s.AddScoped<IComplianceService, ComplianceService>();
         s.AddScoped<INotificationService, NotificationService>();
-        s.AddScoped<IAuditService, AuditService>();
         s.AddScoped<ISearchService, SearchService>();
         s.AddSingleton<ITenantWardenHubPublisher, TenantWardenHubPublisher>();
         return s;
