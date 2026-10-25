@@ -38,3 +38,23 @@ public static class TenantAccess
     public static string Actor(this ClaimsPrincipal user)
         => user.FindFirstValue(ClaimTypes.Email) ?? user.FindFirstValue("email") ?? user.UserId();
 }
+
+/// <summary>
+/// The portal's machine filter: ?agents=guid,guid (agent ids). Missing or empty means every machine.
+/// </summary>
+public static class AgentFilter
+{
+    public static Guid[]? Parse(string? agents)
+    {
+        if (string.IsNullOrWhiteSpace(agents)) return null;
+        var ids = agents.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(s => Guid.TryParse(s, out var g) ? g : (Guid?)null)
+                        .Where(g => g.HasValue).Select(g => g!.Value).Distinct().Take(1000).ToArray();
+        // An unparseable filter matches nothing rather than everything
+        return ids.Length == 0 ? [Guid.Empty] : ids;
+    }
+
+    /// <summary>ClickHouse Array(UUID) parameter value; empty array = no filter.</summary>
+    public static string ToClickHouse(Guid[]? agents) =>
+        "[" + string.Join(",", (agents ?? []).Select(g => $"'{g}'")) + "]";
+}

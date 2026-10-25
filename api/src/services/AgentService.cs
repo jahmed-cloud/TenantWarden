@@ -12,16 +12,18 @@ namespace TenantWarden.Api.Services;
 
 public interface IAgentService
 {
-    Task<List<Agent>> ListAsync(Guid tenantId, CancellationToken ct = default);
+    Task<List<Agent>> ListAsync(Guid tenantId, Guid[]? agents = null, CancellationToken ct = default);
     Task<Agent?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<Agent?> GetByAgentIdAsync(Guid agentId, CancellationToken ct = default);
     Task<Agent> RegisterAsync(RegisterAgentRequest req, CancellationToken ct = default);
     Task HeartbeatAsync(Guid agentId, AgentHeartbeat beat, CancellationToken ct = default);
     Task SetStatusAsync(Guid agentId, AgentStatus status, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
-    Task<AgentStats> GetStatsAsync(Guid tenantId, CancellationToken ct = default);
+    Task<AgentStats> GetStatsAsync(Guid tenantId, Guid[]? agents = null, CancellationToken ct = default);
+    Task<List<GroupCount>> ListGroupsAsync(Guid tenantId, CancellationToken ct = default);
+    Task<int> UpdateGroupsAsync(Guid tenantId, Guid[] agents, string? add, string? remove, CancellationToken ct = default);
     Task<List<AgentMetricPoint>> GetMetricsAsync(Guid tenantId, Guid agentId, int hours, CancellationToken ct = default);
-    Task<List<object>> GetEventsAsync(Guid tenantId, Guid? agentId, int limit, string? source = null, CancellationToken ct = default);
+    Task<List<object>> GetEventsAsync(Guid tenantId, Guid? agentId, int limit, string? source = null, Guid[]? agents = null, CancellationToken ct = default);
     Task<string?> GetInventoryJsonAsync(Guid id, CancellationToken ct = default);
     Task<AgentEnrollmentToken> IssueEnrollmentTokenAsync(Guid tenantId, int expiresInDays, string issuedBy, CancellationToken ct = default);
     Task<Guid?> GetEnrollmentTokenTenantAsync(string tokenId, CancellationToken ct = default);
@@ -36,7 +38,7 @@ public class AgentService : IAgentService
         @"id, tenant_id, hostname, agent_id::text AS agent_id, platform::text AS platform, version, status::text AS status,
           os_name, os_version, architecture, host(ip_address) AS ip_address, mac_address::text AS mac_address, domain_name,
           jwt_public_key, fingerprint, last_seen_at, last_heartbeat_at, cpu_percent, memory_percent, disk_percent,
-          array_to_string(tags, ',') AS tags, uptime_seconds, inventory_at, net_rx_bps, net_tx_bps,
+          array_to_string(tags, ',') AS tags, array_to_string(groups, ',') AS groups, uptime_seconds, inventory_at, net_rx_bps, net_tx_bps,
           connections::text AS connections, created_at, updated_at";
 
     private readonly IDbConnectionFactory _db;
@@ -60,20 +62,21 @@ public class AgentService : IAgentService
         _log        = log;
     }
 
-    public async Task<List<Agent>> ListAsync(Guid tenantId, CancellationToken ct = default)
+    public async Task<List<Agent>> ListAsync(Guid tenantId, Guid[]? agents = null, CancellationToken ct = default)
     {
         await using var conn = _db.CreateConnection();
-        var agents = (await conn.QueryAsync<Agent>(
-            $"SELECT {Columns} FROM agents WHERE tenant_id = @tenantId ORDER BY hostname", new { tenantId })).ToList();
+        var list = (await conn.QueryAsync<Agent>(
+            $"SELECT {Columns} FROM agents WHERE tenant_id = @tenantId AND (@agents::uuid[] IS NULL OR agent_id = ANY(@agents)) ORDER BY hostname",
+            new { tenantId, agents })).ToList();
 
         // Online = the gateway holds a live heartbeat key for the agent (one round trip for the fleet)
-        if (agents.Count > 0)
+        if (list.Count > 0)
         {
-            var beats = await _redis.StringGetAsync(agents.Select(a => (RedisKey)$"agent_heartbeat:{a.AgentId}").ToArray());
-            for (var i = 0; i < agents.Count; i++)
-                agents[i].Status = beats[i].HasValue ? AgentStatus.Online : AgentStatus.Offline;
+            var beats = await _redis.StringGetAsync(list.Select(a => (RedisKey)$"agent_heartbeat:{a.AgentId}").ToArray());
+            for (var i = 0; i < list.Count; i++)
+                list[i].Status = beats[i].HasValue ? AgentStatus.Online : AgentStatus.Offline;
         }
-        return agents;
+        return list;
     }
 
     public async Task<Agent?> GetByIdAsync(Guid id, CancellationToken ct = default)
@@ -160,14 +163,35 @@ public class AgentService : IAgentService
             new { id });
     }
 
-    public async Task<AgentStats> GetStatsAsync(Guid tenantId, CancellationToken ct = default)
+    public async Task<AgentStats> GetStatsAsync(Guid tenantId, Guid[]? agents = null, CancellationToken ct = default)
     {
         // Same online rule as the list, so the numbers always agree
-        var agents = await ListAsync(tenantId, ct);
-        int Count(AgentPlatform p) => agents.Count(a => a.Platform == p);
-        var online = agents.Count(a => a.Status == AgentStatus.Online);
-        return new AgentStats(agents.Count, online, agents.Count - online,
+        var list = await ListAsync(tenantId, agents, ct);
+        int Count(AgentPlatform p) => list.Count(a => a.Platform == p);
+        var online = list.Count(a => a.Status == AgentStatus.Online);
+        return new AgentStats(list.Count, online, list.Count - online,
             Count(AgentPlatform.Windows), Count(AgentPlatform.Linux), Count(AgentPlatform.MacOS), Count(AgentPlatform.Docker));
+    }
+
+    public async Task<List<GroupCount>> ListGroupsAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        await using var conn = _db.CreateConnection();
+        return (await conn.QueryAsync<GroupCount>(
+            @"SELECT g AS Name, COUNT(*)::int AS Agents FROM agents, unnest(groups) g
+              WHERE tenant_id = @tenantId GROUP BY g ORDER BY lower(g)", new { tenantId })).ToList();
+    }
+
+    /// <summary>Adds and/or removes one group on the given agents; returns how many rows changed.</summary>
+    public async Task<int> UpdateGroupsAsync(Guid tenantId, Guid[] agents, string? add, string? remove, CancellationToken ct = default)
+    {
+        await using var conn = _db.CreateConnection();
+        return await conn.ExecuteAsync(
+            @"UPDATE agents SET
+                groups = (SELECT COALESCE(array_agg(DISTINCT g ORDER BY g), '{}')
+                          FROM unnest(array_remove(groups, @remove) || CASE WHEN @add::text IS NULL THEN '{}'::text[] ELSE ARRAY[@add::text] END) g),
+                updated_at = NOW()
+              WHERE tenant_id = @tenantId AND agent_id = ANY(@agents)",
+            new { tenantId, agents, add, remove });
     }
 
     /// <summary>CPU / memory / disk history from ClickHouse, bucketed to keep charts readable.</summary>
@@ -191,7 +215,7 @@ public class AgentService : IAgentService
             ct);
     }
 
-    public async Task<List<object>> GetEventsAsync(Guid tenantId, Guid? agentId, int limit, string? source = null, CancellationToken ct = default)
+    public async Task<List<object>> GetEventsAsync(Guid tenantId, Guid? agentId, int limit, string? source = null, Guid[]? agents = null, CancellationToken ct = default)
     {
         await using var conn = _db.CreateConnection();
         // source: an exact event source ("SQL Server"), or a prefix ending in ':' ("log:" = every custom log)
@@ -200,8 +224,9 @@ public class AgentService : IAgentService
               FROM agent_events
               WHERE tenant_id = @tenantId AND (@agentId::uuid IS NULL OR agent_id = @agentId)
                 AND (@source::text IS NULL OR source = @source OR (right(@source, 1) = ':' AND starts_with(source, @source)))
+                AND (@agents::uuid[] IS NULL OR agent_id = ANY(@agents))
               ORDER BY occurred_at DESC LIMIT @limit",
-            new { tenantId, agentId, source = string.IsNullOrWhiteSpace(source) ? null : source, limit = Math.Clamp(limit, 1, 500) });
+            new { tenantId, agentId, agents, source = string.IsNullOrWhiteSpace(source) ? null : source, limit = Math.Clamp(limit, 1, 500) });
         return rows.Cast<object>().ToList();
     }
 
@@ -282,6 +307,8 @@ public class AgentService : IAgentService
 }
 
 public record EnrollmentTokenInfo(string TokenId, DateTime IssuedAt, DateTime ExpiresAt, string IssuedBy, bool Revoked);
+
+public record GroupCount(string Name, int Agents);
 
 public record AgentEnrollmentToken(string Token, string TokenId, Guid TenantId, DateTime ExpiresAt);
 

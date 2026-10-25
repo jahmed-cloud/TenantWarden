@@ -23,10 +23,37 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> List([FromQuery] Guid tenantId, CancellationToken ct)
+    public async Task<IActionResult> List([FromQuery] Guid tenantId, [FromQuery] string? agents, CancellationToken ct)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
-        return Ok(await _agents.ListAsync(tenantId, ct));
+        return Ok(await _agents.ListAsync(tenantId, AgentFilter.Parse(agents), ct));
+    }
+
+    // GET /api/v1/agents/groups?tenantId= — machine groups and how many agents each holds
+    [HttpGet("groups")]
+    public async Task<IActionResult> Groups([FromQuery] Guid tenantId, CancellationToken ct)
+    {
+        if (!User.CanAccessTenant(tenantId)) return Forbid();
+        return Ok(await _agents.ListGroupsAsync(tenantId, ct));
+    }
+
+    public record GroupChange(Guid TenantId, List<Guid> AgentIds, string? Add, string? Remove);
+
+    // PATCH /api/v1/agents/groups — add the agents to a group and/or take them out of one
+    [HttpPatch("groups")]
+    [Authorize(Roles = "super_admin,org_admin,security_admin")]
+    public async Task<IActionResult> ChangeGroups([FromBody] GroupChange req, CancellationToken ct)
+    {
+        if (!User.CanAccessTenant(req.TenantId)) return Forbid();
+        if (req.AgentIds is not { Count: > 0 and <= 1000 }) return BadRequest(new { error = "Select between 1 and 1000 agents" });
+        var add = req.Add?.Trim();
+        var remove = req.Remove?.Trim();
+        if (string.IsNullOrEmpty(add) && string.IsNullOrEmpty(remove)) return BadRequest(new { error = "Give a group to add or remove" });
+        if (!string.IsNullOrEmpty(add) && !System.Text.RegularExpressions.Regex.IsMatch(add, @"^[A-Za-z0-9 ._-]{1,40}$"))
+            return BadRequest(new { error = "Group names use letters, digits, spaces, . _ - (40 characters at most)" });
+        var changed = await _agents.UpdateGroupsAsync(req.TenantId, [.. req.AgentIds], string.IsNullOrEmpty(add) ? null : add,
+            string.IsNullOrEmpty(remove) ? null : remove, ct);
+        return Ok(new { changed });
     }
 
     [HttpGet("{id:guid}")]
@@ -65,10 +92,10 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet("stats")]
-    public async Task<IActionResult> Stats([FromQuery] Guid tenantId, CancellationToken ct)
+    public async Task<IActionResult> Stats([FromQuery] Guid tenantId, [FromQuery] string? agents, CancellationToken ct)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
-        return Ok(await _agents.GetStatsAsync(tenantId, ct));
+        return Ok(await _agents.GetStatsAsync(tenantId, AgentFilter.Parse(agents), ct));
     }
 
     // GET /api/v1/agents/{id}/metrics?hours=24 — CPU / memory / disk history from ClickHouse
@@ -101,10 +128,10 @@ public class AgentsController : ControllerBase
     // (source "SQL Server" for one source, "log:" for every custom log)
     [HttpGet("events")]
     public async Task<IActionResult> Events([FromQuery] Guid tenantId, [FromQuery] Guid? agentId, [FromQuery] string? source,
-        [FromQuery] int limit = 100, CancellationToken ct = default)
+        [FromQuery] string? agents, [FromQuery] int limit = 100, CancellationToken ct = default)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
-        return Ok(await _agents.GetEventsAsync(tenantId, agentId, limit, source, ct));
+        return Ok(await _agents.GetEventsAsync(tenantId, agentId, limit, source, AgentFilter.Parse(agents), ct));
     }
 
     // POST /api/v1/agents/enrollment-tokens — token for `tenantwarden-agent --agent-token`
@@ -258,7 +285,7 @@ public class OverviewController : ControllerBase
         if (!User.CanAccessTenant(tenantId)) return Forbid();
 
         var alertCounts     = await _alerts.GetCountsAsync(tenantId, ct);
-        var agentStats      = await _agents.GetStatsAsync(tenantId, ct);
+        var agentStats      = await _agents.GetStatsAsync(tenantId, ct: ct);
         var identitySummary = await _identity.GetSummaryAsync(tenantId, ct);
         var deviceSummary   = await _devices.GetSummaryAsync(tenantId, ct);
 

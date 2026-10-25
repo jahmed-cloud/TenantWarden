@@ -161,6 +161,8 @@ public class Agent : BaseEntity
     public long?           NetTxBps       { get; set; }
     /// <summary>JSON: established / listen / time_wait / close_wait connection counts</summary>
     public string?         Connections    { get; set; }
+    /// <summary>Comma-separated machine groups set in the portal</summary>
+    public string?         Groups         { get; set; }
     public DateTime?       InventoryAt    { get; set; }
     public string?         Tags           { get; set; }
 

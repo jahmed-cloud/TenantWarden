@@ -22,7 +22,8 @@ public class QueryController : ControllerBase
 
     public QueryController(IAlertEngineClient engine) => _engine = engine;
 
-    public record QueryRequest(Guid TenantId, string Query, int? WindowMinutes, int? Limit);
+    /// <param name="Agents">Machine scope: comma-separated agent ids; narrows the agent datasets only</param>
+    public record QueryRequest(Guid TenantId, string Query, int? WindowMinutes, int? Limit, string? Agents);
 
     /// <summary>Runs a read-only query against one tenant's data. Same visibility as the pages: the audit log needs an auditor role.</summary>
     [HttpPost]
@@ -33,7 +34,8 @@ public class QueryController : ControllerBase
             return StatusCode(403, new { error = "The AuditLog dataset needs the auditor, org admin or super admin role" });
         try
         {
-            var (status, json) = await _engine.RunQueryAsync(req.TenantId, req.Query ?? "", req.WindowMinutes, Math.Clamp(req.Limit ?? 500, 1, 5000), ct);
+            var (status, json) = await _engine.RunQueryAsync(req.TenantId, req.Query ?? "", req.WindowMinutes, Math.Clamp(req.Limit ?? 500, 1, 5000),
+                AgentFilter.Parse(req.Agents), ct);
             // alert-engine answers 400 with { error, position } for query mistakes; pass it through unchanged
             return new ContentResult { StatusCode = status, Content = json, ContentType = "application/json" };
         }
@@ -190,9 +192,10 @@ public class NetworkAndWorkloadsController : ControllerBase
 
     /// <summary>Fleet throughput over time, per-host traffic and connections, and exposed ports.</summary>
     [HttpGet("network/summary")]
-    public async Task<IActionResult> NetworkSummary([FromQuery] Guid tenantId, [FromQuery] int hours = 24, CancellationToken ct = default)
+    public async Task<IActionResult> NetworkSummary([FromQuery] Guid tenantId, [FromQuery] string? agents, [FromQuery] int hours = 24, CancellationToken ct = default)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
+        var filter = AgentFilter.Parse(agents);
         hours = Math.Clamp(hours, 1, 24 * 30);
         var bucket = hours <= 6 ? 60 : hours <= 48 ? 300 : 3600;
 
@@ -206,9 +209,10 @@ public class NetworkAndWorkloadsController : ControllerBase
                                avg(rx_bps) AS rx, avg(tx_bps) AS tx
                         FROM agent_metrics
                         WHERE tenant_id = {tenant:UUID} AND collected_at >= now64(3) - toIntervalHour({hours:UInt32})
+                          AND (empty({agents:Array(UUID)}) OR has({agents:Array(UUID)}, agent_id))
                         GROUP BY t, agent_id)
                   GROUP BY t ORDER BY t",
-                new Dictionary<string, object> { ["bucket"] = bucket, ["tenant"] = tenantId, ["hours"] = hours }, ct);
+                new Dictionary<string, object> { ["bucket"] = bucket, ["tenant"] = tenantId, ["hours"] = hours, ["agents"] = AgentFilter.ToClickHouse(filter) }, ct);
         }
         catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or TaskCanceledException)
         {
@@ -226,14 +230,14 @@ public class NetworkAndWorkloadsController : ControllerBase
                       COALESCE((SELECT array_agg(DISTINCT substring(p from ':([0-9]+)$'))
                                 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(a.inventory->'listening_ports') = 'array' THEN a.inventory->'listening_ports' ELSE '[]' END) p
                                 WHERE p ~ '^\S+ (0\.0\.0\.0|\*|\[::\]|::):({RiskyPorts})$'), '{{}}') AS ""exposedPorts""
-               FROM agents a WHERE a.tenant_id = @tenantId
+               FROM agents a WHERE a.tenant_id = @tenantId AND (@agents::uuid[] IS NULL OR a.agent_id = ANY(@agents))
                ORDER BY COALESCE(a.net_rx_bps, 0) + COALESCE(a.net_tx_bps, 0) DESC, a.hostname",
-            new { tenantId });
+            new { tenantId, agents = filter });
         return Ok(new { hours, traffic, hosts });
     }
 
     [HttpGet("network/checks")]
-    public async Task<IActionResult> Checks([FromQuery] Guid tenantId)
+    public async Task<IActionResult> Checks([FromQuery] Guid tenantId, [FromQuery] string? agents)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
         await using var conn = _db.CreateConnection();
@@ -241,14 +245,15 @@ public class NetworkAndWorkloadsController : ControllerBase
             @"SELECT c.agent_id AS ""agentId"", c.hostname, c.name, c.type, c.target, c.ok, c.latency_ms AS ""latencyMs"",
                      c.status_code AS ""statusCode"", c.error, c.cert_days_left AS ""certDaysLeft"", c.checked_at AS ""checkedAt"",
                      c.failing_since AS ""failingSince"", (c.checked_at < NOW() - INTERVAL '15 minutes') AS stale
-              FROM endpoint_checks c WHERE c.tenant_id = @tenantId ORDER BY c.ok, c.name, c.hostname",
-            new { tenantId });
+              FROM endpoint_checks c WHERE c.tenant_id = @tenantId AND (@agents::uuid[] IS NULL OR c.agent_id = ANY(@agents))
+              ORDER BY c.ok, c.name, c.hostname",
+            new { tenantId, agents = AgentFilter.Parse(agents) });
         return Ok(rows);
     }
 
     /// <summary>Latency and availability per check over time (5-minute buckets beyond 6 hours).</summary>
     [HttpGet("network/checks/history")]
-    public async Task<IActionResult> CheckHistory([FromQuery] Guid tenantId, [FromQuery] string? name, [FromQuery] int hours = 24)
+    public async Task<IActionResult> CheckHistory([FromQuery] Guid tenantId, [FromQuery] string? name, [FromQuery] string? agents, [FromQuery] int hours = 24)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
         hours = Math.Clamp(hours, 1, 24 * 14);
@@ -260,14 +265,15 @@ public class NetworkAndWorkloadsController : ControllerBase
               FROM endpoint_check_results
               WHERE tenant_id = @tenantId AND checked_at >= NOW() - make_interval(hours => @hours)
                 AND (@name::text IS NULL OR name = @name)
+                AND (@agents::uuid[] IS NULL OR agent_id = ANY(@agents))
               GROUP BY 1, 2 ORDER BY 1",
-            new { tenantId, hours, name, bucket = hours <= 6 ? 1 : 5 });
+            new { tenantId, hours, name, agents = AgentFilter.Parse(agents), bucket = hours <= 6 ? 1 : 5 });
         return Ok(rows);
     }
 
     /// <summary>Server roles the agents discovered, one row per role per host.</summary>
     [HttpGet("workloads")]
-    public async Task<IActionResult> Workloads([FromQuery] Guid tenantId)
+    public async Task<IActionResult> Workloads([FromQuery] Guid tenantId, [FromQuery] string? agents)
     {
         if (!User.CanAccessTenant(tenantId)) return Forbid();
         await using var conn = _db.CreateConnection();
@@ -277,9 +283,9 @@ public class NetworkAndWorkloadsController : ControllerBase
                      w->>'type' AS type, w->>'name' AS name, w->>'status' AS status, w->>'startup' AS startup,
                      w->>'version' AS version, (w->'details')::text AS details, a.inventory_at AS ""seenAt""
               FROM agents a, jsonb_array_elements(CASE WHEN jsonb_typeof(a.inventory->'workloads') = 'array' THEN a.inventory->'workloads' ELSE '[]' END) w
-              WHERE a.tenant_id = @tenantId
+              WHERE a.tenant_id = @tenantId AND (@agents::uuid[] IS NULL OR a.agent_id = ANY(@agents))
               ORDER BY w->>'type', a.hostname, w->>'name'",
-            new { tenantId });
+            new { tenantId, agents = AgentFilter.Parse(agents) });
         return Ok(rows);
     }
 }

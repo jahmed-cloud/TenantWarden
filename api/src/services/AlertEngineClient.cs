@@ -14,7 +14,7 @@ public interface IAlertEngineClient
     Task<MetricInfo?> GetMetricAsync(string metric, CancellationToken ct = default);
     Task<string?> ValidateQueryAsync(string query, CancellationToken ct = default);
     /// <summary>Runs a query; returns alert-engine's status code and JSON body unchanged.</summary>
-    Task<(int Status, string Json)> RunQueryAsync(Guid tenantId, string query, int? windowMinutes, int limit, CancellationToken ct = default);
+    Task<(int Status, string Json)> RunQueryAsync(Guid tenantId, string query, int? windowMinutes, int limit, Guid[]? agents = null, CancellationToken ct = default);
 }
 
 public record MetricInfo(string Metric, string Source, bool Windowed, bool HasParam);
@@ -65,11 +65,11 @@ public class AlertEngineClient : IAlertEngineClient
         return result.GetProperty("ok").GetBoolean() ? null : result.GetProperty("error").GetString();
     }
 
-    public async Task<(int Status, string Json)> RunQueryAsync(Guid tenantId, string query, int? windowMinutes, int limit, CancellationToken ct = default)
+    public async Task<(int Status, string Json)> RunQueryAsync(Guid tenantId, string query, int? windowMinutes, int limit, Guid[]? agents = null, CancellationToken ct = default)
     {
         return await Send(async () =>
         {
-            using var response = await _http.PostAsJsonAsync("query", new { tenantId, query, windowMinutes, limit }, ct);
+            using var response = await _http.PostAsJsonAsync("query", new { tenantId, query, windowMinutes, limit, agents }, ct);
             return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
         });
     }
