@@ -288,6 +288,16 @@ TenantWarden is designed, built and maintained by **Junaid Ahmed**
 - Security reports: follow [SECURITY.md](SECURITY.md) rather than opening a public issue
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Support the Project
+
+TenantWarden is free and MIT licensed. If it is useful to you:
+
+- **[♥ Sponsor on GitHub](https://github.com/sponsors/jahmed-cloud)** to help fund its development.
+- **Star the repository** so other Microsoft 365 admins can find it.
+- **Contribute** a fix, a feature or a docs improvement: start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 [MIT](LICENSE) © 2026 Junaid Ahmed
+
+Built by Junaid Ahmed — [jahmed.cloud](https://jahmed.cloud)
