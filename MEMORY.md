@@ -143,6 +143,8 @@ enrollment-token registry, pub/sub. MinIO is registered in the API but unused (`
   Logo and wordmark: [Brand.tsx](frontend/src/components/Brand.tsx) (inline SVG of the site's mark). Motion: `animate-*`
   utilities (Tailwind keyframes) plus `tw-draw` / `tw-ping` / `tw-live` in index.css; all off under reduced motion.
   `Dialog` and `Sheet` portal to `<body>` (the top bar's backdrop-blur traps fixed children).
+  Maintainer links (website, GitHub, Sponsors, email, bio placeholder) live only in `MAINTAINER` in Brand.tsx; they feed
+  the sidebar "♥ Sponsor" pill, the page footer credit and `/about` (account menu → About). External links spread `NEW_TAB`.
 - **Redis keys:** `agent_heartbeat:{agentId}` (120 s TTL), `agent_tenant:{agentId}`, `agent_token:{jti}` (owning tenant),
   `agent_token_revoked:{jti}`, `agent_tokens:{tenantId}` (hash: token metadata for the portal list),
   `agent_profile:{tenantId}` (monitoring profile JSON, re-synced from Postgres when the API starts),

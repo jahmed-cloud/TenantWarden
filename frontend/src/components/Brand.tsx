@@ -1,7 +1,41 @@
+import { Heart } from 'lucide-react'
 import { cx } from '@/components/ui'
 
 export const WEBSITE = 'https://tenantwarden.org'
 export const REPOSITORY = 'https://github.com/jahmed-cloud/TenantWarden'
+
+/**
+ * The maintainer's links, used by the sidebar, the page footer and the About page.
+ * This is the only place they are written: change a link here and it changes everywhere.
+ */
+export const MAINTAINER = {
+  name: 'Junaid Ahmed',
+  website: 'https://jahmed.cloud',
+  github: 'https://github.com/jahmed-cloud',
+  sponsor: 'https://github.com/sponsors/jahmed-cloud',
+  email: 'iam@jahmed.cloud',
+  // PLACEHOLDER (bio): a one-line bio for the About page. Empty on purpose; nothing is shown until it is filled in.
+  bio: '',
+}
+
+/** Attributes for links that leave the app: new tab, no window.opener, no referrer. */
+export const NEW_TAB = { target: '_blank', rel: 'noopener noreferrer' } as const
+
+/** "https://jahmed.cloud/" → "jahmed.cloud" */
+export const linkText = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+
+/** "♥ Sponsor" pill linking to GitHub Sponsors. `compact` shows the heart alone (collapsed sidebar). */
+export function SponsorLink({ compact, size = 'sm', className }: { compact?: boolean; size?: 'sm' | 'md'; className?: string }) {
+  return (
+    <a href={MAINTAINER.sponsor} {...NEW_TAB} title="Sponsor TenantWarden on GitHub" aria-label={compact ? 'Sponsor TenantWarden on GitHub' : undefined}
+      className={cx('state-layer inline-flex items-center justify-center gap-1.5 rounded-full border border-outline-variant font-medium',
+        'text-on-surface-variant hover:text-on-surface whitespace-nowrap shrink-0',
+        compact ? 'w-10 h-10' : size === 'md' ? 'h-10 px-5 text-sm' : 'h-8 px-3 text-xs', className)}>
+      <Heart size={compact || size === 'md' ? 16 : 14} fill="currentColor" className="text-error" aria-hidden />
+      {!compact && 'Sponsor'}
+    </a>
+  )
+}
 
 /**
  * The TenantWarden mark from tenantwarden.org: three tenant signals meeting at a watch point

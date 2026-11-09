@@ -27,6 +27,7 @@ const NetworkPage    = page(() => import('@/pages/NetworkPage'), 'NetworkPage')
 const TenantsPage    = page(() => import('@/pages/TenantsPage'), 'TenantsPage')
 const ReportsPage    = page(() => import('@/pages/ReportsPage'), 'ReportsPage')
 const AdminPage      = page(() => import('@/pages/AdminPage'), 'AdminPage')
+const AboutPage      = page(() => import('@/pages/AboutPage'), 'AboutPage')
 
 function Splash() {
   return (
@@ -75,6 +76,7 @@ function AuthenticatedApp() {
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="/about" element={<AboutPage />} />
           <Route path="*" element={<Navigate to="/overview" replace />} />
         </Routes>
       </Suspense>

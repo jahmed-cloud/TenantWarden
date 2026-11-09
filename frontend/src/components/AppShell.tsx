@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
-  BarChart3, Bell, Building2, Cable, ChevronDown, Database, SearchCode, ClipboardCheck, Cpu, ExternalLink, FileBarChart, Fingerprint, KeyRound,
+  BarChart3, Bell, Building2, Cable, ChevronDown, Database, SearchCode, ClipboardCheck, Cpu, ExternalLink, FileBarChart, Fingerprint, Info, KeyRound,
   LayoutDashboard, Laptop2, LogOut, Menu as MenuIcon, Moon, PanelLeftClose, PanelLeftOpen, RefreshCw,
   Settings, Shield, ShieldCheck, Sun, type LucideIcon,
 } from 'lucide-react'
@@ -11,7 +11,7 @@ import { useAlertCounts, useCollectNow, useTenants } from '@/services/api/hooks'
 import { useTenantWardenStore, useCan } from '@/store/tenantWardenStore'
 import { ChangePasswordDialog, MfaDialog } from '@/components/AccountDialogs'
 import { MachineScopePicker } from '@/components/MachineScope'
-import { WEBSITE, Wordmark } from '@/components/Brand'
+import { MAINTAINER, NEW_TAB, SponsorLink, WEBSITE, Wordmark, linkText } from '@/components/Brand'
 import { IconButton, Menu, MenuItem, cx } from '@/components/ui'
 
 interface NavItem { label: string; path: string; icon: LucideIcon }
@@ -114,6 +114,7 @@ function TenantSwitcher() {
 }
 
 function AccountMenu() {
+  const navigate = useNavigate()
   const user = useTenantWardenStore((s) => s.currentUser)
   const clearSession = useTenantWardenStore((s) => s.clearSession)
   const qc = useQueryClient()
@@ -144,6 +145,7 @@ function AccountMenu() {
             <MenuItem icon={ShieldCheck} onClick={() => { setDialog('mfa'); close() }}>
               Two-step sign-in {user?.mfaEnabled ? '(on)' : '(off)'}
             </MenuItem>
+            <MenuItem icon={Info} onClick={() => { navigate('/about'); close() }}>About</MenuItem>
             <MenuItem icon={ExternalLink} onClick={() => { window.open(WEBSITE, '_blank', 'noopener'); close() }}>Website and docs</MenuItem>
             <div className="my-1 border-t border-outline-variant" />
             <MenuItem icon={LogOut} onClick={() => { close(); void signOut() }}>Sign out</MenuItem>
@@ -181,6 +183,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         collapsed ? 'w-20' : 'w-[264px]')}>
         {brand(collapsed)}
         <NavContent collapsed={collapsed} />
+        <div className={cx('pt-2', collapsed ? 'flex justify-center px-3' : 'px-6')}><SponsorLink compact={collapsed} /></div>
         <div className={cx('flex items-center gap-2 p-3 text-[11px] text-on-surface-variant', collapsed ? 'justify-center' : 'justify-between px-6')}>
           {!collapsed && <a href={WEBSITE} target="_blank" rel="noreferrer" className="hover:text-primary">tenantwarden.org · v1.0</a>}
           <IconButton icon={collapsed ? PanelLeftOpen : PanelLeftClose} label={collapsed ? 'Expand navigation' : 'Collapse navigation'} onClick={() => setCollapsed(!collapsed)} />
@@ -193,6 +196,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <aside className="w-[280px] h-full bg-surface-container-low rounded-r-2xl flex flex-col shadow-e3" onClick={(e) => e.stopPropagation()}>
             {brand(false)}
             <NavContent collapsed={false} onNavigate={() => setMobileOpen(false)} />
+            <div className="px-6 pt-2 pb-5"><SponsorLink /></div>
           </aside>
         </div>
       )}
@@ -211,6 +215,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         {/* Keyed by route so each page fades up as it opens */}
         <main key={pathname} className="flex-1 px-3 sm:px-6 pb-10 pt-2 max-w-[1600px] w-full mx-auto animate-fade-up">{children}</main>
+        <footer className="px-3 sm:px-6 pb-6 max-w-[1600px] w-full mx-auto text-[11px] text-on-surface-variant">
+          Built by {MAINTAINER.name} · <a href={MAINTAINER.website} {...NEW_TAB} className="hover:text-primary hover:underline">{linkText(MAINTAINER.website)}</a>
+        </footer>
       </div>
     </div>
   )
