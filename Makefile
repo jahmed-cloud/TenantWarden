@@ -1,7 +1,7 @@
 ##############################################################################
 # TenantWarden Enterprise — Root Makefile
 ##############################################################################
-.PHONY: all up down build build-agent test lint setup-env certs seed health clean help logs ps
+.PHONY: all up down build build-agent publish-images test lint setup-env certs seed health clean help logs ps
 
 COMPOSE := docker compose
 VERSION ?= 1.0.0
@@ -104,6 +104,10 @@ build-agent:
 	@if [ -f gateway/certs/ca.crt ]; then cp gateway/certs/ca.crt agent/dist/ca.crt; fi
 	@echo "✅ Binaries in agent/dist/ (served at /downloads/)"
 
+# Build every image and push it to Docker Hub as $(VERSION) and latest (PUSH=0 builds only)
+publish-images:
+	bash scripts/publish-images.sh $(VERSION)
+
 test:
 	cd frontend && npm test -- --run || true
 	cd collector-service && npm test -- --run || true
@@ -139,6 +143,7 @@ help:
 	&& echo "  make seed        → Add sample data" \
 	&& echo "  make health      → Health check all services" \
 	&& echo "  make build-agent → Cross-compile agents" \
+	&& echo "  make publish-images → Build and push images to Docker Hub" \
 	&& echo "  make test        → Run all tests" \
 	&& echo "  make logs        → Tail all logs" \
 	&& echo "  make clean       → Remove everything" \
