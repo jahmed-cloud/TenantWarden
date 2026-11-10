@@ -202,6 +202,11 @@ make seed        # (re)apply Postgres migrations + ClickHouse schema
   `tenantwarden-api`, `role` + `tenant_id` claims) instead of using a real password. POSTs through nginx need a body
   (`-d ''`), or nginx answers 400.
 - MinIO is behind `--profile storage` (unused, and its Docker Hub image is gone).
+- **Docker Hub:** `make publish-images` ([publish-images.sh](scripts/publish-images.sh)) builds 12 images one by one and
+  pushes `docker.io/jahmed22/tenantwarden-<dir>:{VERSION,latest}` (linux/amd64, OCI labels, refuses a dirty tree).
+  [deploy/docker-compose.yml](deploy/docker-compose.yml) runs them with only a `.env` (no published DB ports, no
+  plugin-engine). `tenantwarden-postgres` / `-clickhouse` carry the migrations (`tenantwarden-migrate` in each re-applies them; the ClickHouse one targets `$CLICKHOUSE_DB`);
+  the gateway's `docker-entrypoint.d/40-tenantwarden-certs.sh` makes a self-signed cert when none is mounted.
 
 ---
 

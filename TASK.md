@@ -196,6 +196,25 @@ broken · P2 = correctness / hygiene · P3 = docs drift · P4 = tests & CI · P5
 - [ ] Website ↔ portal: changelog / release notes on tenantwarden.org linked from the portal's "What's new", and a
       version check against the latest GitHub release.
 
+## Docker Hub images (2026-11-10)
+
+- [x] Images on Docker Hub (`docker.io/jahmed22/tenantwarden-*`, tags `1.0.0` + `latest`, linux/amd64) built and
+      pushed by `scripts/publish-images.sh`; `deploy/docker-compose.yml` + `deploy/.env.example` run them without a
+      clone. Postgres and ClickHouse images carry the schema (`tenantwarden-migrate` in each re-applies it after upgrades);
+      the gateway makes a self-signed certificate when none is mounted.
+- [x] Fixed on the way: the API crashed at startup without MinIO credentials although nothing uses MinIO (now only
+      registered when configured); ClickHouse init SQL names no database, so a fresh volume put the tables in
+      `default` instead of `tenantwarden_analytics` (the image runs it through `tenantwarden-migrate`).
+- [ ] Dev compose has the same ClickHouse fresh-volume problem (`make seed` hides it by passing `--database`): mount
+      `clickhouse/tenantwarden-migrate.sh` as the init script there too.
+- [ ] Agent binaries for image installs: `/downloads/` is empty unless `./agent-dist` is mounted. Publish the
+      binaries as GitHub release assets (or bake them into the gateway image) and link them from Agents → Add agent.
+- [ ] `linux/arm64` images (Raspberry Pi, Graviton, Apple silicon without emulation): cross-compile .NET with
+      `--platform=$BUILDPLATFORM` + `-a $TARGETARCH` and use `docker buildx --platform linux/amd64,linux/arm64`.
+- [ ] Publish from CI on a version tag instead of a laptop, with SBOM + provenance attestations and image signing.
+- [ ] Docker Hub repository descriptions (overview text + link to the README) for each image.
+- [ ] Move to a `tenantwarden` organisation on Docker Hub (or GHCR) so the image names don't depend on a personal account.
+
 ## P5 — New features (proposed)
 
 - [x] Alert rule builder, user & role management, enrollment-token UI, Defender incident view, on-demand reports

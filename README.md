@@ -163,6 +163,31 @@ Then:
 Want to look around first? `make demo-data` loads a placeholder tenant with sample alerts. Don't run it on
 an install with real tenants connected.
 
+### Run from Docker Hub (no clone, no build)
+
+Pre-built images are on Docker Hub as `jahmed22/tenantwarden-*` (linux/amd64). You only need Docker and two
+files from [deploy/](deploy/):
+
+```bash
+mkdir tenantwarden && cd tenantwarden
+curl -fsSLO https://raw.githubusercontent.com/jahmed-cloud/TenantWarden/main/deploy/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/jahmed-cloud/TenantWarden/main/deploy/.env.example
+
+# A different random value for each secret
+for k in POSTGRES_PASSWORD REDIS_PASSWORD CLICKHOUSE_PASSWORD JWT_SIGNING_KEY ENCRYPTION_KEY; do
+  sed -i.bak "s|^$k=.*|$k=$(openssl rand -hex 32)|" .env
+done && rm .env.bak
+
+docker compose up -d
+```
+
+The portal opens on **http://localhost:8090** (HTTPS on 8443 with a self-signed certificate made on first start;
+mount your own as described in the compose file). The database schema is built into the images. After pulling a
+newer version, run `docker compose pull && docker compose up -d`, then `docker compose exec postgres tenantwarden-migrate`
+and `docker compose exec clickhouse tenantwarden-migrate`.
+Keep `.env` safe: `ENCRYPTION_KEY` protects every tenant's client secret. Agent binaries aren't in the images
+yet, so build them with `make build-agent` from a clone and mount them as shown in the compose file.
+
 ### Microsoft Graph permissions (application)
 
 | Permission | Used for |
