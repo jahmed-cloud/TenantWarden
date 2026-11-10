@@ -101,6 +101,10 @@ public static class ServiceRegistration
 
     public static IServiceCollection AddTenantWardenStorage(this IServiceCollection s, IConfiguration cfg)
     {
+        // Nothing stores objects yet; without credentials the MinIO client throws at startup,
+        // so it is only registered when MinIO is configured.
+        if (string.IsNullOrEmpty(cfg["Storage:MinIO:AccessKey"]) || string.IsNullOrEmpty(cfg["Storage:MinIO:SecretKey"]))
+            return s;
         s.AddMinio(opt =>
         {
             opt.WithEndpoint(cfg["Storage:MinIO:Endpoint"] ?? "minio:9000")
